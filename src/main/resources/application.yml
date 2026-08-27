@@ -1,0 +1,105 @@
+server:
+  port: ${SERVER_PORT:9900}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+file:
+  upload:
+    path: ${FILE_UPLOAD_PATH:C:/Users/joker/study_agent_data/uploads}
+    allowed-extensions: txt,md,markdown,pdf,doc,docx,ppt,pptx,xls,xlsx,html,htm,csv,json,tex
+
+# 应用数据目录（SQLite 数据库、GitHub 本地缓存等存放于此）
+app:
+  data-dir: ${APP_DATA_DIR:C:/Users/joker/study_agent_data}
+  master-key: ${APP_MASTER_KEY:study-assistant-default-key}
+
+github:
+  repo-url: ${GITHUB_REPO_URL:}
+  cache-path: ${GITHUB_CACHE_PATH:C:/Users/joker/study_agent_data/github_cache}
+  git-executable: git
+  push-enabled: ${GITHUB_PUSH_ENABLED:true}
+
+# Milvus 连接：云端 Zilliz Cloud 用 uri+token（MILVUS_URI/MILVUS_TOKEN）；本地用 host+port。
+# 连接失败时应用自动降级（RAG 关闭、其余功能正常）。
+milvus:
+  uri: ${MILVUS_URI:}
+  token: ${MILVUS_TOKEN:}
+  host: ${MILVUS_HOST:localhost}
+  port: ${MILVUS_PORT:19530}
+  username: ${MILVUS_USERNAME:}
+  password: ${MILVUS_PASSWORD:}
+  database: ${MILVUS_DATABASE:default}
+  timeout: ${MILVUS_TIMEOUT:10000}
+
+spring:
+  autoconfigure:
+    # 排除全部 DashScope 自动配置：它们会在 DASHSCOPE_API_KEY 为空/缺失时于启动期抛异常，
+    # 导致健康检查失败。应用全部手动构建 DashScope 模型（ChatModelFactory/RerankService/VectorEmbeddingService），
+    # 不依赖任何 Spring AI 自动配置 bean，排除无害且杜绝启动期 key 校验崩溃。
+    exclude:
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAgentAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioSpeechAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioTranscriptionAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeChatAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeEmbeddingAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeImageAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeRerankAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeVideoAutoConfiguration
+  servlet:
+    multipart:
+      # Spring Boot 默认单文件上限 1MB，真实的 pdf/pptx/xlsx 几乎都超限（413 空响应）→ 必须调大
+      max-file-size: 100MB
+      max-request-size: 110MB
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:sqlite:C:/Users/joker/study_agent_data/study.db}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:your-api-key-here}
+      base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com}
+      chat:
+        options:
+          timeout: 180000
+      retry:
+        max-attempts: 3
+        backoff:
+          initial-interval: 2000
+          multiplier: 2
+          max-interval: 10000
+
+dashscope:
+  api:
+    key: ${DASHSCOPE_API_KEY:your-api-key-here}
+  embedding:
+    model: text-embedding-v4
+
+document:
+  chunk:
+    max-size: 800
+    overlap: 100
+
+rag:
+  top-k: 3
+  model: "qwen3-max"
+
+# 自动 Plan-Execute-Replan：观察执行状态（连续无打卡）自动重排剩余任务
+plan:
+  auto-replan:
+    enabled: true          # 关闭则仅保留手动/教练对话触发重排
+    no-checkin-days: 3     # 连续 N 天无打卡即判定计划停滞
+    cooldown-days: 7       # 距上次重排至少 N 天才允许再次自动重排
+
+# 检索后重排：走 DashScope 公网 text-rerank 端点（不依赖企业 MaaS 网关）
+rerank:
+  enabled: true
+  base-url: https://dashscope.aliyuncs.com
+  model: gte-rerank-v2

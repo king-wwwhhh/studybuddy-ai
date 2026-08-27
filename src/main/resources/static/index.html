@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>期末速成助手 · StudyBuddy</title>
+    <!-- 自包含：不再依赖任何外网 CDN，离线 / 独立预览均可正常运行 -->
+    <link rel="stylesheet" href="styles.css?v=3">
+</head>
+<body>
+    <!-- 全屏粒子特效层（液态拖尾 + 辉光 + 点击水波） -->
+    <canvas id="fx-canvas"></canvas>
+
+    <!-- 动态极光背景 -->
+    <div class="aurora-bg">
+        <span class="blob blob-1"></span>
+        <span class="blob blob-2"></span>
+        <span class="blob blob-3"></span>
+        <span class="blob blob-4"></span>
+    </div>
+
+    <!-- 演示模式徽标（未连接后端时显示） -->
+    <div id="demoBadge" class="demo-badge" hidden>✨ 演示模式 · 数据存本地</div>
+
+    <div class="app-shell">
+        <!-- 侧边导航 -->
+        <aside class="glass-nav">
+            <div class="brand">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/></svg>
+                </div>
+                <div class="brand-text">
+                    <span class="brand-name">期末速成助手</span>
+                    <span class="brand-sub">StudyBuddy AI</span>
+                </div>
+            </div>
+
+            <nav class="nav-list" id="navList">
+                <button class="nav-item active" data-view="chat">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span>智能对话</span>
+                </button>
+                <button class="nav-item" data-view="knowledge">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                    <span>知识库</span>
+                </button>
+                <button class="nav-item" data-view="plans">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                    <span>复习计划</span>
+                </button>
+                <button class="nav-item" data-view="quiz">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg>
+                    <span>测验刷题</span>
+                </button>
+                <button class="nav-item" data-view="profile">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    <span>我的画像</span>
+                </button>
+            </nav>
+
+            <div class="nav-foot">
+                <button class="agent-pill" id="activeAgentPill" title="当前回答你的 Agent（自动路由时由主管实时决策）">
+                    <span class="dot"></span><span id="activeAgentText">🤖 自动路由</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 主内容 -->
+        <main class="main-stage">
+            <!-- 对话视图 -->
+            <section class="view view-chat active" id="view-chat">
+                <header class="view-head">
+                    <div class="view-title">
+                        <h1>智能对话</h1>
+                        <p class="view-sub">答疑 · 出题 · 规划 · 督导，一个对话框全搞定</p>
+                    </div>
+                    <div class="head-actions">
+                        <div class="agent-group">
+                            <span class="agent-label">多 Agent 团队</span>
+                            <div class="agent-switch" id="agentSwitch">
+                                <button class="chip active" data-agent="auto" title="由主管 Agent 根据意图自动选择最合适的助手">🤖 自动</button>
+                                <button class="chip" data-agent="chat" title="智能学伴 · 通用问答 / 日常闲聊">💬 学伴</button>
+                                <button class="chip" data-agent="study" title="答疑导师 · 知识点讲解 / RAG 检索答疑">📚 答疑</button>
+                                <button class="chip" data-agent="quiz" title="出题考官 · 测验刷题 / 交卷批改">📝 出题</button>
+                                <button class="chip" data-agent="planner" title="规划师 · 制定复习计划 / 拆解任务">📅 规划</button>
+                                <button class="chip" data-agent="coach" title="督导教练 · 打卡监督 / 进度反馈 / 自动重排">🔥 督导</button>
+                            </div>
+                        </div>
+                        <button class="ghost-btn" id="newChatBtn">＋ 新建对话</button>
+                    </div>
+                </header>
+
+                <div class="chat-scroll" id="chatMessages">
+                    <div class="welcome-card" id="welcomeCard">
+                        <div class="welcome-emoji">🎓</div>
+                        <h2>嗨，我是你的期末速成助手</h2>
+                        <p>我可以答疑、出测验、帮你制定并执行复习计划。把笔记传进知识库，我会基于你的资料回答。</p>
+                        <div class="suggest-row">
+                            <button class="suggest" data-q="帮我制定一份一周的高数复习计划">📅 制定复习计划</button>
+                            <button class="suggest" data-q="用费曼学习法给我讲讲微积分基本定理">💡 费曼式讲解</button>
+                            <button class="suggest" data-q="出 3 道关于拉格朗日中值定理的选择题">📝 生成测验</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 模型切换移入对话框输入区：上方一行 = 当前模型胶囊 + ⚙设置 -->
+                <div class="chat-input-bar glass-input">
+                    <div class="input-top">
+                        <button class="model-pill fx-liquid" id="modelPill" type="button" title="切换模型">
+                            <span class="model-dot" id="modelDot"></span>
+                            <span id="modelPillText">默认模型</span>
+                            <span class="src-chip src-builtin" id="modelPillChip">内置</span>
+                            <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <button class="icon-btn" id="modelSettingsBtn" type="button" title="模型设置 / 添加外部模型">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        </button>
+                    </div>
+
+                    <div class="input-row">
+                        <textarea id="messageInput" rows="1" placeholder="问问速成助手，或描述你的复习需求…（Enter 发送，Shift+Enter 换行）"></textarea>
+                        <div class="input-actions">
+                            <button class="icon-btn" id="uploadChatBtn" title="上传资料到知识库">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                            </button>
+                            <button class="send-btn" id="sendButton" title="发送">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <input type="file" id="fileInput" accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" style="display:none">
+                </div>
+            </section>
+
+            <!-- 知识库视图 -->
+            <section class="view view-knowledge" id="view-knowledge">
+                <header class="view-head">
+                    <div class="view-title">
+                        <h1>知识库</h1>
+                        <p class="view-sub">上传笔记 / 课件，自动推送私有仓库并向量化</p>
+                    </div>
+                    <div class="head-actions">
+                        <button class="ghost-btn" id="syncBtn">🔄 同步 GitHub</button>
+                        <label class="primary-btn">
+                            上传资料
+                            <input type="file" id="kbFileInput" multiple accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" style="display:none">
+                        </label>
+                    </div>
+                </header>
+                <div class="drop-zone" id="dropZone">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+                    <p>把笔记 / 课件 / 期末资料拖到这里，或点击「上传资料」</p>
+                    <span class="hint">支持 txt / md / pdf / docx / pptx / xlsx</span>
+                </div>
+                <div class="kb-list" id="kbList"></div>
+            </section>
+
+            <!-- 计划视图 -->
+            <section class="view view-plans" id="view-plans">
+                <header class="view-head">
+                    <div class="view-title">
+                        <h1>复习计划</h1>
+                        <p class="view-sub">AI 拆解任务 · 打卡 · 薄弱点热力</p>
+                    </div>
+                    <div class="head-actions">
+                        <button class="ghost-btn" id="aiPlanBtn">✨ AI 帮我规划</button>
+                        <button class="primary-btn" id="newPlanBtn">＋ 新建计划</button>
+                    </div>
+                </header>
+                <div class="plans-wrap" id="plansWrap"></div>
+            </section>
+
+            <!-- 测验视图 -->
+            <section class="view view-quiz" id="view-quiz">
+                <header class="view-head">
+                    <div class="view-title">
+                        <h1>测验刷题</h1>
+                        <p class="view-sub">按计划章节 / 主题生成选择题；交卷即时批改</p>
+                    </div>
+                </header>
+                <div class="quiz-panel" id="quizPanel">
+                    <div class="quiz-form glass-card">
+                        <h3>生成测验</h3>
+                        <label>关联计划（必选，题目会结合该计划的任务 + 知识库出题）</label>
+                        <select id="quizPlanSelect">
+                            <option value="">— 不绑定计划（仅按主题出） —</option>
+                        </select>
+                        <label>章节（可选；不选则按 plan 全部任务均匀出题）</label>
+                        <div class="quiz-row">
+                            <select id="quizChapterSelect" disabled>
+                                <option value="">— 选中计划后可选章节 —</option>
+                            </select>
+                            <button class="mini" id="manageChapterBtn" disabled title="给当前计划手动添加 / 删除章节名">管理章节</button>
+                        </div>
+                        <label>主题 / 关键词（可选）</label>
+                        <input id="quizTopic" type="text" placeholder="例如：矩阵可逆条件 / 反常积分审敛法" />
+                        <div class="quiz-row">
+                            <label>数量</label>
+                            <input id="quizCount" type="number" min="1" max="20" value="5" />
+                        </div>
+                        <button class="primary-btn block" id="genQuizBtn">生成题目</button>
+                    </div>
+                    <div class="quiz-paper" id="quizPaper"></div>
+                </div>
+            </section>
+
+            <!-- 画像视图 -->
+            <section class="view view-profile" id="view-profile">
+                <header class="view-head">
+                    <div class="view-title">
+                        <h1>我的画像</h1>
+                        <p class="view-sub">让助手更懂你的考试与目标</p>
+                    </div>
+                    <button class="ghost-btn" id="saveProfileBtn">保存画像</button>
+                </header>
+                <div class="profile-grid" id="profileGrid">
+                    <div class="glass-card profile-form">
+                        <label>称呼</label><input id="pfName" placeholder="同学"/>
+                        <label>考试科目</label><input id="pfSubjects" placeholder="高数, 线代, 英语"/>
+                        <label>考试日期</label><input id="pfExam" type="date"/>
+                        <label>学习风格</label><input id="pfStyle" placeholder="视觉型 / 费曼式"/>
+                        <label>目标</label><textarea id="pfGoals" placeholder="例如：两周内刷完近五年真题"></textarea>
+                    </div>
+                    <div class="glass-card">
+                        <h3>近期会话</h3>
+                        <div class="session-list" id="sessionList"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- 创建计划（手动表单） -->
+    <div class="modal-mask" id="createPlanModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>新建学习计划</h3>
+                <button class="x-close" id="createPlanModalClose" aria-label="close">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">填好基础信息，默认由 AI 按天拆任务写入计划；取消勾选则只建空计划，稍后手动添加任务。</p>
+                <div class="form-grid two-col">
+                    <label>标题<span class="req">*</span></label>
+                    <input id="cpTitle" type="text" placeholder="如：期末高数上速成" />
+                    <label>科目</label>
+                    <input id="cpSubject" type="text" placeholder="如：高等数学 / 线性代数 / 大学英语" />
+                    <label>考试日</label>
+                    <input id="cpExamDate" type="date" />
+                    <label>总天数（之后可改）</label>
+                    <input id="cpTotalDays" type="number" min="1" max="60" value="14" />
+                    <label>每天学习时长（小时）</label>
+                    <input id="cpHoursPerDay" type="number" min="0.5" max="10" step="0.5" value="2" />
+                    <label>优先级（1-5，5 最紧迫）</label>
+                    <select id="cpPriority">
+                        <option value="5">5 · 临考冲刺</option>
+                        <option value="4">4 · 紧迫</option>
+                        <option value="3" selected>3 · 一般</option>
+                        <option value="2">2 · 余裕</option>
+                        <option value="1">1 · 提前</option>
+                    </select>
+                    <label>备注（基础 / 偏好 / 重点）</label>
+                    <textarea id="cpNotes" rows="3" placeholder="例如：上次高数期末 62 分；向量计算比较弱；偏好先做真题再补概念"></textarea>
+                </div>
+                <label class="ai-toggle"><input type="checkbox" id="cpAiTasks" checked /> 保存后用 AI 按天拆任务（推荐）</label>
+                <div class="modal-actions">
+                    <button class="ghost-btn" id="cpCancel">取消</button>
+                    <button class="primary-btn" id="cpSubmit">保存计划</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 每日打卡 -->
+    <div class="modal-mask" id="checkinModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>📅 今日打卡</h3>
+                <button class="x-close" id="checkinModalClose" aria-label="close">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">勾选今天完成的任务，写写今天做了什么——会带时间记录到计划的完成详情里。</p>
+                <div class="ci-plan-name" id="ciPlanName"></div>
+                <label class="ci-label">今日任务</label>
+                <div class="ci-tasks" id="ciTasks"></div>
+                <label class="ci-label">今天做了什么</label>
+                <textarea id="ciText" rows="3" placeholder="例如：复习了定积分章节，做了 3 道真题；整理了错题本"></textarea>
+                <div class="form-grid two-col">
+                    <label>学习时长（分钟）</label>
+                    <input id="ciMinutes" type="number" min="0" step="5" value="60" />
+                    <label>今日心情</label>
+                    <select id="ciMood">
+                        <option value="😀">😀 很棒</option>
+                        <option value="🙂">🙂 还行</option>
+                        <option value="😐">😐 一般</option>
+                        <option value="😩">😩 有点累</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="ghost-btn" id="ciCancel">取消</button>
+                    <button class="primary-btn" id="ciSubmit">打卡提交</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 规划（详细表单） -->
+    <div class="modal-mask" id="aiPlanModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>AI 帮我规划 ✨</h3>
+                <button class="x-close" id="aiPlanModalClose" aria-label="close">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">信息越详细，AI 越能按天拆任务、出有针对性的测验。提交后 AI 会把任务落库，并按章节整理到右侧时间轴。</p>
+                <div class="form-grid two-col">
+                    <label>标题<span class="req">*</span></label>
+                    <input id="apTitle" type="text" placeholder="如：线代速成 14 天" />
+                    <label>科目</label>
+                    <input id="apSubject" type="text" placeholder="如：线性代数" />
+                    <label>考试日</label>
+                    <input id="apExamDate" type="date" />
+                    <label>总天数</label>
+                    <input id="apTotalDays" type="number" min="1" max="60" value="14" />
+                    <label>每天学习时长（小时）</label>
+                    <input id="apHoursPerDay" type="number" min="0.5" max="10" step="0.5" value="2" />
+                    <label>优先级</label>
+                    <select id="apPriority">
+                        <option value="5">5 · 临考冲刺</option>
+                        <option value="4">4 · 紧迫</option>
+                        <option value="3" selected>3 · 一般</option>
+                        <option value="2">2 · 余裕</option>
+                        <option value="1">1 · 提前</option>
+                    </select>
+                    <label>重点章节 / 资料</label>
+                    <textarea id="apTopics" rows="2" placeholder="例如：特征值与特征向量、二次型（教材第七章），或上传了的《高数上复习.pdf》"></textarea>
+                    <label>基础 / 目标 / 偏好</label>
+                    <textarea id="apNotes" rows="3" placeholder="例如：基础薄；对证明题没把握；想先练计算再补概念；每天 2 小时"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button class="ghost-btn" id="apCancel">取消</button>
+                    <button class="primary-btn" id="apSubmit">让 AI 拆任务</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 管理章节弹窗（测验页：给当前计划手动维护章节名） -->
+    <div class="modal-mask" id="chapterModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>管理章节</h3>
+                <button class="x-close" id="chapterModalClose" aria-label="close">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">手动维护「<span id="chapterPlanName"></span>」的章节清单，出题时可下拉选择按章节刷题。</p>
+                <div class="chapter-list" id="chapterList"></div>
+                <div class="quiz-row">
+                    <input id="chapterInput" type="text" placeholder="输入新章节名，如：二次型" />
+                    <button class="primary-btn" id="addChapterBtn">添加</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模型切换弹窗（点击输入区模型胶囊弹出，居中选择模型） -->
+    <div class="modal-mask" id="modelSwitchModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>切换模型</h3>
+                <button class="x-close" id="modelSwitchModalClose" aria-label="close">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">内置模型（DashScope 阿里云）支持<strong>多 Agent + 知识库 + 工具</strong>。外部 API（DeepSeek / OpenAI 兼容 / Kimi）<strong>仅支持普通对话</strong>，不会执行知识库检索或调用任何工具。</p>
+                <div class="model-list" id="modelSwitchList"></div>
+                <button class="ghost-btn block" id="modelSwitchSettingsBtn">⚙ 模型设置 · 添加 / 删除外部模型</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模型设置弹窗 -->
+    <div class="modal-mask" id="modelModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>模型设置</h3>
+                <button class="icon-btn" id="modelModalClose" title="关闭">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">内置模型（DashScope 阿里云）支持<strong>多 Agent + 知识库 + 工具</strong>。外部 API（DeepSeek / OpenAI 兼容 / Kimi）<strong>仅支持普通对话</strong>，不会执行知识库检索或调用任何工具。</p>
+                <div class="model-list" id="modelList"></div>
+                <div class="model-add">
+                    <h4>＋ 添加外部模型</h4>
+                    <div class="form-grid">
+                        <label>名称</label><input id="extName" placeholder="例如：DeepSeek 对话" />
+                        <label>提供方</label>
+                        <select id="extPreset">
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="moonshot">Kimi (Moonshot)</option>
+                            <option value="custom">自定义 OpenAI 兼容</option>
+                        </select>
+                        <label>Base URL</label><input id="extBase" placeholder="https://api.deepseek.com/v1" />
+                        <label>模型 ID</label><input id="extModel" placeholder="deepseek-chat" />
+                        <label>API Key</label><input id="extKey" type="password" placeholder="sk-..." autocomplete="off" />
+                    </div>
+                    <button class="primary-btn block" id="extAddBtn">添加并启用</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <div class="loading-text" id="loadingText">处理中…</div>
+            <div class="loading-subtext" id="loadingSub">后端正在努力工作</div>
+        </div>
+    </div>
+
+    <script src="app.js?v=3"></script>
+</body>
+</html>
