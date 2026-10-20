@@ -68,13 +68,14 @@ public class ChatService {
     }
 
     /**
-     * 创建 ChatModel
+     * 创建 ChatModel。
+     * 模型名不再用 SDK 的 DEFAULT_MODEL_NAME 常量（那是写死的），统一取模型目录的探测结果。
      */
     public DashScopeChatModel createChatModel(DashScopeApi dashScopeApi, double temperature, int maxToken, double topP) {
         return DashScopeChatModel.builder()
                 .dashScopeApi(dashScopeApi)
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel(DashScopeChatModel.DEFAULT_MODEL_NAME)
+                        .withModel(chatModelFactory.getDefaultModel())
                         .withTemperature(temperature)
                         .withMaxToken(maxToken)
                         .withTopP(topP)

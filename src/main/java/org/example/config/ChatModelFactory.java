@@ -4,11 +4,15 @@ import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.example.agent.model.ExternalChatModel;
+import org.example.service.ModelCatalogService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,11 +27,17 @@ import java.util.Map;
 @Service
 public class ChatModelFactory {
 
+    private static final Logger logger = LoggerFactory.getLogger(ChatModelFactory.class);
+
     @Value("${spring.ai.dashscope.api-key}")
     private String apiKey;
 
-    @Value("${chat.model:qwen3.7-max}")
-    private String defaultChatModel;
+    /**
+     * 模型目录：负责发现「当前真正可用」的模型名，并在请求的模型不存在时自动降级。
+     * 这样阿里云改名/下线模型时不需要改代码，只需重启（或等 24h 自动刷新）。
+     */
+    @Autowired
+    private ModelCatalogService modelCatalog;
 
     /**
      * DashScope 基础地址。默认走阿里云公开网关；
@@ -70,10 +80,14 @@ public class ChatModelFactory {
 
     /**
      * 动态模型创建（前端可指定模型名）。
-     * model 为空或空白时回落到默认模型；按模型名缓存。
+     * model 为空或空白时回落到默认模型；若指定的模型当前不可用（阿里云改名/下线），
+     * 自动降级到可用模型，避免 404 Model not exist。按模型名缓存。
      */
     public DashScopeChatModel create(String model, double temperature, int maxToken, double topP) {
-        String modelName = (model == null || model.isBlank()) ? defaultChatModel : model;
+        String modelName = modelCatalog.nearestUsable(model);
+        if (model != null && !model.isBlank() && !modelName.equals(model.trim())) {
+            logger.warn("模型 {} 当前不可用，已自动降级为 {}", model, modelName);
+        }
         // 缓存键必须包含 temperature/maxToken/topP：这些参数固化在 defaultOptions 里，
         // 否则先被小 maxToken 调用（如 Supervisor 路由的 256）构建的实例会污染后续主对话。
         String cacheKey = "dash:" + modelName + "|" + temperature + "|" + maxToken + "|" + topP;
@@ -117,11 +131,13 @@ public class ChatModelFactory {
 
     /** 默认模型创建（保持旧接口，供内部调用） */
     public DashScopeChatModel create(double temperature, int maxToken, double topP) {
-        return create(defaultChatModel, temperature, maxToken, topP);
+        return create(null, temperature, maxToken, topP);
     }
 
+    /** 当前生效的默认模型（由模型目录探测得出，不写死） */
     public String getDefaultModel() {
-        return defaultChatModel;
+        modelCatalog.ensureFresh();
+        return modelCatalog.getDefaultModel();
     }
 
     /**
@@ -129,7 +145,7 @@ public class ChatModelFactory {
      * 默认使用默认模型。
      */
     public String complete(String system, String user, double temperature, int maxToken) {
-        return complete(defaultChatModel, system, user, temperature, maxToken);
+        return complete(null, system, user, temperature, maxToken);
     }
 
     /** 一次性同步补全（可指定模型或外部模型规格 ext:baseUrl|apiKey|modelId） */

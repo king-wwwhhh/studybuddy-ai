@@ -1,33 +1,33 @@
 package org.example.controller;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.example.service.ModelCatalogService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * 暴露可用模型列表，供前端「切换模型」下拉使用。
+ *
+ * <p>列表来源是 {@link ModelCatalogService} 启动后的实测结果，
+ * 不是写死的常量 —— 阿里云上/下线模型时无需改代码。</p>
  */
 @RestController
 @RequestMapping("/api")
 public class ModelsController {
 
-    /** 逗号分隔的可用模型 id（可在 application.yml 的 app.models 覆盖） */
-    @Value("${app.models:qwen3.7-max,qwen-max,qwen-plus,qwen-flash}")
-    private String modelsCsv;
+    @Autowired
+    private ModelCatalogService modelCatalog;
 
-    @Value("${chat.model:qwen3.7-max}")
-    private String defaultModel;
-
-    /** 模型元数据：id -> [显示名, 描述] */
+    /** 已知模型的展示元数据：id -> [显示名, 描述]；未知模型自动生成 */
     private static final Map<String, String[]> META = new LinkedHashMap<>();
+
     static {
         META.put("qwen3.7-max", new String[]{"Qwen3.7-Max", "通义千问旗舰，推理与知识最全面"});
         META.put("qwen-max", new String[]{"Qwen-Max", "经典旗舰，稳定可靠"});
@@ -37,19 +37,14 @@ public class ModelsController {
 
     @GetMapping("/models")
     public Map<String, Object> listModels() {
-        Set<String> enabled = new LinkedHashSet<>();
-        for (String id : modelsCsv.split(",")) {
-            id = id.trim();
-            if (!id.isEmpty()) {
-                enabled.add(id);
-            }
-        }
-        // 若配置未列出默认模型，确保默认模型仍出现在列表中
-        enabled.add(defaultModel);
+        modelCatalog.ensureFresh();
 
         List<Map<String, String>> models = new ArrayList<>();
-        for (String id : enabled) {
-            String[] meta = META.getOrDefault(id, new String[]{id, ""});
+        for (String id : modelCatalog.getUsableModels()) {
+            String[] meta = META.get(id);
+            if (meta == null) {
+                meta = new String[]{displayName(id), "自动发现的可用模型"};
+            }
             Map<String, String> m = new LinkedHashMap<>();
             m.put("id", id);
             m.put("name", meta[0]);
@@ -59,8 +54,35 @@ public class ModelsController {
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("success", true);
-        resp.put("current", defaultModel);
+        resp.put("current", modelCatalog.getDefaultModel());
+        resp.put("probed", modelCatalog.isProbed());
         resp.put("models", models);
         return resp;
+    }
+
+    /** 手动触发一次模型重探（改了密钥/换空间后无需重启） */
+    @PostMapping("/models/refresh")
+    public Map<String, Object> refreshModels() {
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("success", true);
+        resp.put("message", modelCatalog.refreshNow());
+        resp.put("current", modelCatalog.getDefaultModel());
+        resp.put("models", modelCatalog.getUsableModels());
+        return resp;
+    }
+
+    /** qwen3.8-max → Qwen3.8-Max；qwen-plus-latest → Qwen-Plus-Latest */
+    private static String displayName(String id) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : id.split("-")) {
+            if (sb.length() > 0) {
+                sb.append('-');
+            }
+            if (part.isEmpty()) {
+                continue;
+            }
+            sb.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
+        }
+        return sb.toString();
     }
 }

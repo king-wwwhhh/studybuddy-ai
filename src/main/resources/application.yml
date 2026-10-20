@@ -15,19 +15,25 @@ file:
 app:
   data-dir: ${APP_DATA_DIR:C:/Users/joker/study_agent_data}
   master-key: ${APP_MASTER_KEY:study-assistant-default-key}
-  # 前端「切换模型」下拉候选（必须是 DashScope 原生端点真实存在的模型名）
+  # 前端「切换模型」候选池 —— 只是往池子里加名字，不决定优先级。
+  # 留空也完全可用：会自动从 /compatible-mode/v1/models 发现聊天模型。
   models: ${APP_MODELS:qwen3.7-max,qwen-max,qwen-plus,qwen-flash}
 
-# 默认对话模型。
-# 注意：必须用 DashScope 原生 /services/aigc/text-generation/generation 端点真实支持的模型名，
-# 否则会返回 404 {"code":"InvalidParameter","message":"Model not exist."}。
-# 不存在的例子：qwen3-max（正确写法是 qwen-max / qwen3.7-max / qwen3.8-max）。
-# 原生端点可用：qwen3.7-max、qwen3.7-max-2026-05-20、qwen3.7-max-preview、qwen-max、
-#              qwen-plus、qwen-plus-latest、qwen-flash
-# 仅 OpenAI 兼容端点可用（原生端点会 400 url error）：qwen3.8-max、qwen3.8-flash、
-#              qwen3.7-plus、qwen3.6-plus、qwen3.5-*
+# ============ 模型自动探测（解决"阿里云改名/下线模型就报错"的问题）============
+# 政策：代码里不再写死任何模型名，启动时由 ModelCatalogService 实测得出。
+#   1) 候选池 = app.models + 从 /compatible-mode/v1/models 自动发现的聊天模型
+#      + 内置兜底(qwen-max/qwen-plus/qwen-flash)；CHAT_MODEL 若设置则作为最高优先
+#   2) 候选按「版本号从新到旧」排序（qwen3.9-max 排在 qwen3.7-max 前面）
+#   3) 逐个对 DashScope 原生端点 /services/aigc/text-generation/generation
+#      发 max_tokens=1 的探测请求，只保留返回 HTTP 200 的
+#   4) 取第一个通过探测的作为默认模型 —— 阿里云以后上 qwen3.9-max，会自动用上，不用改代码
+#   5) 每 24 小时自动重探一次；运行中请求了已下线的模型会自动降级到可用模型
+#   6) POST /api/models/refresh 可手动立即重探（换空间/换密钥后无需重启）
+# 所以：阿里云模型名变更时，重启应用即自动恢复；探测失败也还有内置兜底。
 chat:
-  model: ${CHAT_MODEL:qwen3.7-max}
+  auto-detect: ${CHAT_AUTO_DETECT:true}
+  # 仅在需要"钉死"某个模型时才设置；留空 = 由探测结果决定（推荐）
+  model: ${CHAT_MODEL:}
 
 github:
   repo-url: ${GITHUB_REPO_URL:}
@@ -102,7 +108,8 @@ document:
 
 rag:
   top-k: 3
-  model: "qwen-max"
+  # 留空 = 跟随模型目录的自动探测结果；需要钉死某个模型时才填（如 qwen-max）
+  model: "${RAG_MODEL:}"
 
 # 自动 Plan-Execute-Replan：观察执行状态（连续无打卡）自动重排剩余任务
 plan:

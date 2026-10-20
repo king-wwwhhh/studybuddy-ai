@@ -42,8 +42,13 @@ public class RagService {
     @Value("${rag.top-k:3}")
     private int topK;
 
-    @Value("${rag.model:qwen-max}")
+    /** RAG 生成用的模型。留空 = 跟随模型目录的自动探测结果，避免阿里云改名后 RAG 整段报错 */
+    @Value("${rag.model:}")
     private String model;
+
+    /** 模型目录：提供当前真实可用的模型名 */
+    @Autowired
+    private ModelCatalogService modelCatalog;
 
     private Generation generation;
 
@@ -56,7 +61,7 @@ public class RagService {
         // 创建 Generation 实例
         generation = new Generation();
 
-        logger.info("RAG 服务初始化完成，model: {}, topK: {}", model, topK);
+        logger.info("RAG 服务初始化完成，model: {}, topK: {}", modelCatalog.getDefaultModel(), topK);
     }
 
     /** dashscope-sdk-java 的 baseHttpApiUrl 必须带 /api/v1 前缀 */
@@ -185,7 +190,7 @@ public class RagService {
 
         GenerationParam param = GenerationParam.builder()
                 .apiKey(apiKey)
-                .model(model)
+                .model(modelCatalog.nearestUsable(model))
                 .incrementalOutput(true)
                 .resultFormat("message")
                 .messages(messages)
