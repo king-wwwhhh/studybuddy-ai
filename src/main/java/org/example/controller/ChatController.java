@@ -562,7 +562,7 @@ public class ChatController {
         @com.fasterxml.jackson.annotation.JsonAlias({"agent", "AGENT", "agentType"})
         private String Agent;
 
-        /** 显式指定对话模型（如 qwen3-turbo）；为空则使用后端默认模型 */
+        /** 显式指定对话模型（如 qwen3.7-max）；为空则使用后端默认模型 */
         @com.fasterxml.jackson.annotation.JsonProperty(value = "Model")
         @com.fasterxml.jackson.annotation.JsonAlias({"model", "MODEL"})
         private String Model;

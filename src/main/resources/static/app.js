@@ -22,10 +22,10 @@ class StudyBuddyApp {
         this.selectedModel = '';
         this.BUILTIN_MODELS = [
             { id: '', name: '默认模型', builtin: true },
-            { id: 'qwen3-max', name: 'Qwen3-Max（最强）', builtin: true },
-            { id: 'qwen3-30b-a3b-thinking-2507', name: 'Qwen3-30B 思维版', builtin: true },
-            { id: 'qwen3-plus', name: 'Qwen3-Plus', builtin: true },
-            { id: 'qwen3-turbo', name: 'Qwen3-Turbo（最快）', builtin: true }
+            { id: 'qwen3.7-max', name: 'Qwen3.7-Max（旗舰）', builtin: true },
+            { id: 'qwen-max', name: 'Qwen-Max（经典旗舰）', builtin: true },
+            { id: 'qwen-plus', name: 'Qwen-Plus（均衡）', builtin: true },
+            { id: 'qwen-flash', name: 'Qwen-Flash（最快）', builtin: true }
         ];
         this.customModels = this.loadCustomModels();
         this.sessionId = this.generateSessionId();
@@ -392,11 +392,11 @@ class StudyBuddyApp {
         if (path === '/profile' && method === 'GET') return this.store.profile;
         if (path === '/profile' && method === 'PUT') { this.store.profile = Object.assign({}, this.store.profile, body); this.persist(); return this.store.profile; }
         if (path === '/memory/sessions') return { sessions: this.store.sessions };
-        if (path === '/models' && method === 'GET') return { current: 'qwen3-max', models: [
-            { id: 'qwen3-max', name: 'Qwen3-Max（最强）', description: '通义千问最强旗舰' },
-            { id: 'qwen3-30b-a3b-thinking-2507', name: 'Qwen3-30B 思维版', description: '轻量思维模型' },
-            { id: 'qwen3-plus', name: 'Qwen3-Plus', description: '均衡性价比' },
-            { id: 'qwen3-turbo', name: 'Qwen3-Turbo（最快）', description: '极速响应' }
+        if (path === '/models' && method === 'GET') return { current: 'qwen3.7-max', models: [
+            { id: 'qwen3.7-max', name: 'Qwen3.7-Max（旗舰）', description: '通义千问旗舰' },
+            { id: 'qwen-max', name: 'Qwen-Max', description: '经典旗舰' },
+            { id: 'qwen-plus', name: 'Qwen-Plus', description: '均衡性价比' },
+            { id: 'qwen-flash', name: 'Qwen-Flash（最快）', description: '极速响应' }
         ] };
         return null;
     }

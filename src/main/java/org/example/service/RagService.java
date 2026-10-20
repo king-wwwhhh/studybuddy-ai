@@ -42,7 +42,7 @@ public class RagService {
     @Value("${rag.top-k:3}")
     private int topK;
 
-    @Value("${rag.model:qwen3-30b-a3b-thinking-2507}")
+    @Value("${rag.model:qwen-max}")
     private String model;
 
     private Generation generation;
@@ -206,7 +206,7 @@ public class RagService {
                 !message.getOutput().getChoices().isEmpty()) {
                 
                 // 获取消息内容
-                // 注意：qwen3-30b-a3b-thinking-2507 模型会在 content 中返回完整内容
+                // 注意：思维类模型会在 content 中返回完整内容
                 // reasoning 部分可能需要通过特殊方式提取或者直接包含在 content 中
                 String content = message.getOutput().getChoices().get(0).getMessage().getContent();
 

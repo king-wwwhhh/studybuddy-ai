@@ -26,7 +26,7 @@ public class ChatModelFactory {
     @Value("${spring.ai.dashscope.api-key}")
     private String apiKey;
 
-    @Value("${chat.model:qwen3-max}")
+    @Value("${chat.model:qwen3.7-max}")
     private String defaultChatModel;
 
     /**
@@ -50,7 +50,7 @@ public class ChatModelFactory {
      * 模型规格识别。
      * <ul>
      *   <li>"ext:baseUrl|apiKey|modelId" → 外部 OpenAI-兼容模型</li>
-     *   <li>其余（qwen3-max 等）→ DashScope 内置模型</li>
+     *   <li>其余（qwen3.7-max 等）→ DashScope 内置模型</li>
      *   <li>null/空白 → 默认模型（DashScope）</li>
      * </ul>
      * 这样外部模型也能进入多 Agent（SupervisorAgent 路由 + ReactAgent 工具循环）。

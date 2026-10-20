@@ -19,20 +19,20 @@ import java.util.Set;
 @RequestMapping("/api")
 public class ModelsController {
 
-    /** 逗号分隔的可用模型 id（可在 application.yml 覆盖） */
-    @Value("${app.models:qwen3-max,qwen3-30b-a3b-thinking-2507,qwen3-plus,qwen3-turbo}")
+    /** 逗号分隔的可用模型 id（可在 application.yml 的 app.models 覆盖） */
+    @Value("${app.models:qwen3.7-max,qwen-max,qwen-plus,qwen-flash}")
     private String modelsCsv;
 
-    @Value("${chat.model:qwen3-max}")
+    @Value("${chat.model:qwen3.7-max}")
     private String defaultModel;
 
     /** 模型元数据：id -> [显示名, 描述] */
     private static final Map<String, String[]> META = new LinkedHashMap<>();
     static {
-        META.put("qwen3-max", new String[]{"Qwen3-Max", "通义千问最强旗舰，推理与知识最全面"});
-        META.put("qwen3-30b-a3b-thinking-2507", new String[]{"Qwen3-30B 思维版", "轻量思维模型，擅长数学与逻辑推导"});
-        META.put("qwen3-plus", new String[]{"Qwen3-Plus", "均衡性价比，速度优于 Max"});
-        META.put("qwen3-turbo", new String[]{"Qwen3-Turbo", "极速响应，适合高频对话"});
+        META.put("qwen3.7-max", new String[]{"Qwen3.7-Max", "通义千问旗舰，推理与知识最全面"});
+        META.put("qwen-max", new String[]{"Qwen-Max", "经典旗舰，稳定可靠"});
+        META.put("qwen-plus", new String[]{"Qwen-Plus", "均衡性价比，速度优于 Max"});
+        META.put("qwen-flash", new String[]{"Qwen-Flash", "极速响应，适合高频对话"});
     }
 
     @GetMapping("/models")

@@ -81,7 +81,7 @@ plan:
 | Java | 17 | 开发语言 |
 | Spring Boot | 3.2.0 | 应用框架 |
 | Spring AI Alibaba | 1.1.0.0-RC2 | Agent / 模型 / 工具框架 |
-| DashScope SDK | 2.17.0 | 阿里云百炼模型（qwen3-max / text-embedding-v4 / gte-rerank-v2） |
+| DashScope SDK | 2.17.0 | 阿里云百炼模型（qwen3.7-max / text-embedding-v4 / gte-rerank-v2） |
 | Milvus | 2.5.10（本地 compose）/ SDK 2.6.10 | 向量数据库 |
 | SQLite | 3.46.0.0 | 计划 / 打卡 / 记忆持久化 |
 | Apache PDFBox | 2.0.31 | PDF 正文抽取 |
