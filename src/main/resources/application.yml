@@ -89,7 +89,7 @@ document:
 
 rag:
   top-k: 3
-  model: "qwen3-max"
+  model: "qwen-max"
 
 # 自动 Plan-Execute-Replan：观察执行状态（连续无打卡）自动重排剩余任务
 plan:
