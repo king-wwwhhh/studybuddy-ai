@@ -66,6 +66,14 @@
                 <artifactId>jackson-datatype-jsr310</artifactId>
                 <version>2.17.0</version>
             </dependency>
+            <!-- 覆盖 Spring Boot BOM 管理的 JUnit 5.10.1（本地仓库只有 5.10.3 这一整套，离线构建需要对齐） -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>5.10.3</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -184,11 +192,30 @@
             <artifactId>pdfbox</artifactId>
             <version>2.0.31</version>
         </dependency>
+
+        <!-- 单测：只覆盖纯逻辑（索引选型/参数换算等），不需要 Spring 上下文与 Milvus 实例。
+             版本由上面的 junit-bom 5.10.3 统一管理 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 
     <build>
         <plugins>
+            <!-- 钉版本：本地仓库只有 3.2.5 的 surefire-junit-platform provider（离线构建需要对齐） -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

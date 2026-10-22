@@ -39,7 +39,7 @@ public class RagService {
     @Value("${spring.ai.dashscope.base-url:https://dashscope.aliyuncs.com}")
     private String baseUrl;
 
-    @Value("${rag.top-k:3}")
+    @Value("${rag.top-k:10}")
     private int topK;
 
     /** RAG 生成用的模型。留空 = 跟随模型目录的自动探测结果，避免阿里云改名后 RAG 整段报错 */

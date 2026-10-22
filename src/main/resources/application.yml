@@ -32,9 +32,15 @@ app:
 # 所以：阿里云模型名变更时，重启应用即自动恢复；探测失败也还有内置兜底。
 chat:
   auto-detect: ${CHAT_AUTO_DETECT:true}
-  # 仅在需要"钉死"某个模型时才设置；留空 = 由探测结果决定（推荐）
+  # only set when a model must be pinned; blank = decided by startup auto-detection (recommended)
   model: ${CHAT_MODEL:}
-
+  # SSE chat executor: bounded threads + bounded queue + CallerRuns backpressure
+  executor:
+    core-size: ${CHAT_EXEC_CORE:8}
+    max-size: ${CHAT_EXEC_MAX:32}
+    queue-capacity: ${CHAT_EXEC_QUEUE:200}
+    keep-alive-seconds: ${CHAT_EXEC_KEEPALIVE:60}
+    thread-name-prefix: chat-sse-
 github:
   repo-url: ${GITHUB_REPO_URL:}
   cache-path: ${GITHUB_CACHE_PATH:C:/Users/joker/study_agent_data/github_cache}
@@ -52,6 +58,17 @@ milvus:
   password: ${MILVUS_PASSWORD:}
   database: ${MILVUS_DATABASE:default}
   timeout: ${MILVUS_TIMEOUT:10000}
+  # 向量索引选型：auto = 按 collection 行数自动选（≤5万 FLAT / ≤500万 HNSW / 更大 IVF_FLAT）
+  # 手工指定请填 FLAT | HNSW | IVF_FLAT；已有 collection 的索引不会被重建，检索参数按实际索引类型取
+  index:
+    type: auto
+    m: 16                 # HNSW 每层连接数
+    ef-construction: 200  # HNSW 建图候选宽度
+    nlist: 0              # IVF 桶数；0 = 按行数自动算（4·√N，且保证 N ≥ 39·nlist）
+    nprobe: 10            # IVF 检索探测桶数
+    ef: 64                # HNSW 检索候选宽度，运行时自动抬到 ≥ topK
+    # 索引类型变更时是否自动 dropIndex + 按新类型重建（默认 false：重建期间检索会短暂不可用）
+    auto-rebuild: ${MILVUS_INDEX_AUTO_REBUILD:false}
 
 spring:
   autoconfigure:
@@ -107,10 +124,26 @@ document:
     overlap: 100
 
 rag:
-  top-k: 3
-  # 留空 = 跟随模型目录的自动探测结果；需要钉死某个模型时才填（如 qwen-max）
+  # recall width: candidates handed to rerank (must exceed rerank-top-n)
+  top-k: 10
+  # how many chunks actually enter the prompt after rerank
+  rerank-top-n: 3
+  # max chunks kept per chapter (chapter-diverse selection)
+  max-per-chapter: 2
+  # read-back verification sample size (0 disables)
+  verify-sample-size: 20
+  # bounded retries for read-back verification (0/200/400ms)
+  verify-attempts: 3
+  verify-retry-base-ms: 200
+  # L2^2 threshold (normalized vectors: L2^2 = 2 - 2cos; 1.2 <=> cos~0.4)
+  score-threshold: 1.2
+  # blank = follow auto-detected model catalog
   model: "${RAG_MODEL:}"
 
+# conversation memory: recallHistory tool lets the model re-read older turns from SQLite
+memory:
+  recall:
+    limit: 5
 # 自动 Plan-Execute-Replan：观察执行状态（连续无打卡）自动重排剩余任务
 plan:
   auto-replan:

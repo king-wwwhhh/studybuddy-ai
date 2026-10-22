@@ -9,6 +9,7 @@ import org.example.agent.Agent;
 import org.example.agent.AgentRegistry;
 import org.example.agent.SupervisorAgent;
 import org.example.agent.tool.DateTimeTools;
+import org.example.agent.tool.HistoryRecallTool;
 import org.example.agent.tool.InternalDocsTools;
 import org.example.config.ChatModelFactory;
 import org.slf4j.Logger;
@@ -20,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +54,10 @@ public class ChatService {
     private AgentRegistry agentRegistry;
     @Autowired
     private SupervisorAgent supervisorAgent;
+
+    /** 历史召回工具：窗口外的旧对话只能靠它回查 */
+    @Autowired
+    private HistoryRecallTool historyRecallTool;
     @Autowired
     private ChatModelFactory chatModelFactory;
     @Autowired
@@ -88,9 +94,58 @@ public class ChatService {
         return createChatModel(dashScopeApi, 0.7, 8192, 0.9);
     }
 
-    /** 主管路由：解析最终应答 Agent 类型 */
+    /** 本次请求的路由提示（显式选择与意图冲突时的软性提醒），由 buildAgentSystemPrompt 消费后清理 */
+    private static final ThreadLocal<String> ROUTE_HINT = new ThreadLocal<>();
+
+    /** 主管路由：解析最终应答 Agent 类型（无历史，兼容旧调用） */
     public String resolveAgentType(String override, String question) {
-        return supervisorAgent.decide(override, question, null);
+        return resolveAgentType(override, question, null);
+    }
+
+    /**
+     * 主管路由：解析最终应答 Agent 类型。
+     * 把最近两轮用户问题交给决策器做指代消歧，并把「显式选择 vs 实际意图」的冲突转成提示词里的软性提醒。
+     */
+    public String resolveAgentType(String override, String question, List<Map<String, String>> history) {
+        SupervisorAgent.RouteDecision decision =
+                supervisorAgent.decideDetailed(override, question, recentUserTurns(history));
+        logger.info("路由决策: agent={} 来源={} 分数[{}] 证据[{}] 冲突={}",
+                decision.agent, decision.source, decision.scores, decision.evidence, decision.conflictAgent);
+        ROUTE_HINT.set(buildConflictHint(decision));
+        return decision.agent;
+    }
+
+    /** 最近两轮用户提问，最近的在前（供指代消歧使用） */
+    private static List<String> recentUserTurns(List<Map<String, String>> history) {
+        List<String> turns = new ArrayList<>();
+        if (history == null) {
+            return turns;
+        }
+        for (int i = history.size() - 1; i >= 0 && turns.size() < 2; i--) {
+            Map<String, String> m = history.get(i);
+            if (m == null || !"user".equals(m.get("role"))) {
+                continue;
+            }
+            String content = m.get("content");
+            if (content != null && !content.isBlank()) {
+                turns.add(content);
+            }
+        }
+        return turns;
+    }
+
+    /**
+     * 显式选择与问题意图冲突时：不改派用户的选择，但让模型知道这件事，
+     * 不属于本角色职责就一句话说明并建议切换，而不是硬套本角色流程。
+     */
+    private static String buildConflictHint(SupervisorAgent.RouteDecision decision) {
+        if (decision.conflictAgent == null) {
+            return null;
+        }
+        return "【路由提示】用户本次显式选择的是「" + decision.agent + "」，但问题内容更像「"
+                + decision.conflictAgent + "」类请求（证据：" + decision.evidence + "）。"
+                + "保持当前角色作答即可；若这个问题确实不属于你的职责，请在回答开头用一句话说明并建议用户"
+                + "切换到对应角色，不要硬套本角色流程，也不要编造不属于本角色的结果。";
     }
 
     /**
@@ -105,8 +160,17 @@ public class ChatService {
      * @param model 指定对话模型（为空则使用后端默认）。ext: 规格走 ExternalChatModel，且不注入方法工具。
      */
     public RouteResult answer(String question, String agentType, List<Map<String, String>> history, String model) {
+        return answer(question, agentType, history, model, null);
+    }
+
+    /**
+     * 同 {@link #answer(String, String, List, String)}，额外带 sessionId：
+     * 系统提示里会写入它，模型才能在"看不到更早对话"时调用 `recallHistory` 回查。
+     */
+    public RouteResult answer(String question, String agentType, List<Map<String, String>> history,
+                              String model, String sessionId) {
         Agent agent = agentRegistry.get(agentType);
-        String system = buildAgentSystemPrompt(agent, history);
+        String system = buildAgentSystemPrompt(agent, history, sessionId);
         boolean external = isExternalModel(model);
         if (external) {
             system = system + "\n\n[环境提示] 当前会话选用的是外部 API，仅支持普通对话，" +
@@ -118,7 +182,7 @@ public class ChatService {
                 .model(chatModel)
                 .systemPrompt(system);
         if (!external) {
-            b.methodTools(agent.getMethodTools())
+            b.methodTools(methodToolsFor(agent))
                     .tools(getToolCallbacks());
         }
         String fullAnswer = executeChat(b.build(), question);
@@ -138,8 +202,15 @@ public class ChatService {
      * 并在系统提示词里加一句"外部 API 仅支持对话，不检索知识库"，避免模型误调工具。</p>
      */
     public ReactAgent buildAgent(String agentType, List<Map<String, String>> history, String model) {
+        return buildAgent(agentType, history, model, null);
+    }
+
+    /**
+     * 构建流式对话的 ReactAgent，并带上 sessionId（供 `recallHistory` 回查更早的对话）。
+     */
+    public ReactAgent buildAgent(String agentType, List<Map<String, String>> history, String model, String sessionId) {
         Agent agent = agentRegistry.get(agentType);
-        String system = buildAgentSystemPrompt(agent, history);
+        String system = buildAgentSystemPrompt(agent, history, sessionId);
         boolean external = isExternalModel(model);
         if (external) {
             system = system + "\n\n[环境提示] 当前会话选用的是外部 API，仅支持普通对话，" +
@@ -151,10 +222,18 @@ public class ChatService {
                 .model(chatModel)
                 .systemPrompt(system);
         if (!external) {
-            b.methodTools(agent.getMethodTools())
+            b.methodTools(methodToolsFor(agent))
                     .tools(getToolCallbacks());
         }
         return b.build();
+    }
+
+    /** Agent 自带工具 + 全局的「历史召回」工具：任何角色都可能被问到窗口外的旧对话 */
+    private Object[] methodToolsFor(Agent agent) {
+        Object[] base = agent.getMethodTools();
+        Object[] merged = java.util.Arrays.copyOf(base, base.length + 1);
+        merged[base.length] = historyRecallTool;
+        return merged;
     }
 
     private static boolean isExternalModel(String model) {
@@ -163,7 +242,22 @@ public class ChatService {
 
     /** 组合 Agent 系统提示词 + 近期历史 */
     public String buildAgentSystemPrompt(Agent agent, List<Map<String, String>> history) {
+        return buildAgentSystemPrompt(agent, history, null);
+    }
+
+    /**
+     * 组合 Agent 系统提示词 + 近期历史 + 会话记忆提示。
+     *
+     * @param sessionId 当前会话 id；非空时告诉模型「窗口外的对话可以调 recallHistory 回查」，
+     *                  这是灰区/超窗内容的唯一补偿通路（否则模型只能答"没提过"或编造）。
+     */
+    public String buildAgentSystemPrompt(Agent agent, List<Map<String, String>> history, String sessionId) {
         StringBuilder sb = new StringBuilder(agent.getSystemPrompt());
+        String routeHint = ROUTE_HINT.get();
+        if (routeHint != null) {
+            sb.append("\n\n").append(routeHint);
+            ROUTE_HINT.remove(); // 一次请求只消费一次，避免线程复用时串味
+        }
         if (history != null && !history.isEmpty()) {
             sb.append("\n\n--- 对话历史 ---\n");
             for (Map<String, String> m : history) {
@@ -179,6 +273,14 @@ public class ChatService {
                 }
             }
             sb.append("--- 对话历史结束 ---\n");
+        }
+        if (sessionId != null && !sessionId.isBlank()) {
+            sb.append("\n\n【会话记忆】sessionId=").append(sessionId).append('\n')
+                    .append("你能直接看到的只有上面「对话历史」里的最近几轮（更早的消息可能已被移出窗口或压成摘要）。")
+                    .append("用户若提到「刚才/之前/我们说过/那个约束/你还记得吗」而你在历史里看不到，")
+                    .append("**必须先调用 recallHistory(sessionId=\"").append(sessionId)
+                    .append("\", query=相关关键词)** 回查本会话更早的真实消息，再据实回答；")
+                    .append("若召回为空，如实说明你看不到那段对话，绝不编造。");
         }
         return sb.toString();
     }

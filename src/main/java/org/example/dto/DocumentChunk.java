@@ -36,6 +36,11 @@ public class DocumentChunk {
      */
     private String title;
 
+    /**
+     * 章节路径（如「第一章 > 1.2 向量检索 > 【表：成绩单】」），写入 Milvus metadata 供溯源
+     */
+    private String headingPath;
+
     public DocumentChunk() {
     }
 

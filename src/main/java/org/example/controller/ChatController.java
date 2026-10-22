@@ -12,12 +12,14 @@ import lombok.Getter;
 import lombok.Setter;
 import org.example.service.ChatService;
 import org.example.service.MemoryService;
+import org.example.service.PendingCompressPolicy;
 import org.example.entity.ChatMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -28,7 +30,6 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -50,7 +51,13 @@ public class ChatController {
     @Autowired(required = false)
     private ToolCallbackProvider tools;
 
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    /**
+     * SSE 对话执行器：有界线程池（{@link org.example.config.ChatExecutorConfig}）。
+     * 改造前是 `Executors.newCachedThreadPool()` —— 线程数无上限、队列不缓冲，突发流量会无限建线程。
+     */
+    @Autowired
+    @Qualifier("chatExecutor")
+    private ExecutorService executor;
 
     // 存储会话信息
     private final Map<String, SessionInfo> sessions = new ConcurrentHashMap<>();
@@ -80,8 +87,8 @@ public class ChatController {
             List<Map<String, String>> history = session.getHistory();
             logger.info("会话历史消息对数: {}", history.size() / 2);
 
-            // 多 Agent 路由：显式指定或主管自动决策
-            String agentType = chatService.resolveAgentType(request.getAgent(), request.getQuestion());
+            // 多 Agent 路由：显式指定或主管自动决策（带历史，供指代消歧）
+            String agentType = chatService.resolveAgentType(request.getAgent(), request.getQuestion(), history);
 
             // 解析模型规格：内嵌外部模型字段时合成 "ext:baseUrl|apiKey|modelId"
             String modelSpec = resolveModelSpec(request);
@@ -92,7 +99,8 @@ public class ChatController {
             logger.info("多Agent路由 -> {} ; 开始对话", agentType);
 
             // 构建并执行所选 Agent 的 ReactAgent（携带用户指定模型）
-            ChatService.RouteResult result = chatService.answer(request.getQuestion(), agentType, history, modelSpec);
+            ChatService.RouteResult result = chatService.answer(request.getQuestion(), agentType, history, modelSpec,
+                    request.getId());
             String fullAnswer = result.answer;
 
             // 更新会话历史
@@ -168,8 +176,8 @@ public class ChatController {
                 List<Map<String, String>> history = session.getHistory();
                 logger.info("ReactAgent 会话历史消息对数: {}", history.size() / 2);
 
-                // 多 Agent 路由（流式）：显式指定或主管自动决策
-                String agentType = chatService.resolveAgentType(request.getAgent(), request.getQuestion());
+                // 多 Agent 路由（流式）：显式指定或主管自动决策（带历史，供指代消歧）
+                String agentType = chatService.resolveAgentType(request.getAgent(), request.getQuestion(), history);
 
                 // 解析模型规格
                 String modelSpec = resolveModelSpec(request);
@@ -180,7 +188,7 @@ public class ChatController {
                 logger.info("多Agent路由(流式) -> {} ; 开始对话", agentType);
 
                 // 构建所选 Agent 的 ReactAgent（携带专属工具、提示词与用户指定模型）
-                ReactAgent agent = chatService.buildAgent(agentType, history, modelSpec);
+                ReactAgent agent = chatService.buildAgent(agentType, history, modelSpec, request.getId());
                 
                 // 用于累积完整答案
                 StringBuilder fullAnswerBuilder = new StringBuilder();
@@ -349,8 +357,8 @@ public class ChatController {
      * 管理单个会话的历史消息，支持自动清理和线程安全
      */
     private static class SessionInfo {
-        /** 攒够这么多条旧消息就触发一次 LLM 摘要压缩（memoryService.summarize 需 ≥6 条才有输出） */
-        private static final int COMPRESS_TRIGGER = 8;
+        /** 攒够这么多条旧消息就触发一次 LLM 摘要压缩（移出即压缩：灰区最多 1 条） */
+        private static final int COMPRESS_TRIGGER = PendingCompressPolicy.TRIGGER;
         private final String sessionId;
         private final MemoryService memoryService;
         // 存储历史消息对：[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
@@ -414,10 +422,12 @@ public class ChatController {
         /**
          * 把暂存的旧消息用 LLM 压成一条 [历史摘要]，合并到历史最前。
          * 若已有摘要则连同它一起重新压缩，保证只保留一条有界的摘要（不无限累积）。
-         * 压缩失败时退化为丢弃（pendingCompress 清空），不影响主链路。
+         * 压缩失败时**保留** pendingCompress（下一轮重试），只在超过上限时丢最老的几条 ——
+         * 原来的"失败即清空"会让这批消息既不进摘要、也不在窗口里，等于被静默删除。
          */
         private void compressPending() {
             if (pendingCompress.isEmpty()) return;
+            boolean summarized = false;
             try {
                 List<ChatMessage> toCompress = new ArrayList<>();
                 boolean hasSystem = !messageHistory.isEmpty() && "system".equals(messageHistory.get(0).get("role"));
@@ -443,12 +453,28 @@ public class ChatController {
                     } else {
                         messageHistory.add(0, sysMsg);
                     }
+                    summarized = true;
                     logger.info("会话 {} 对话中压缩完成，历史摘要已更新", sessionId);
                 }
             } catch (Exception e) {
                 logger.warn("会话 {} 对话中压缩失败: {}", sessionId, e.getMessage());
             } finally {
-                pendingCompress.clear();
+                if (summarized) {
+                    pendingCompress.clear();
+                } else {
+                    // 摘要没生成：保留原始消息等待下次重试，只按上限裁剪，绝不静默丢弃整批
+                    int overflow = PendingCompressPolicy.overflow(pendingCompress.size(),
+                            PendingCompressPolicy.MAX_PENDING);
+                    for (int i = 0; i < overflow; i++) {
+                        pendingCompress.remove(0);
+                    }
+                    if (overflow > 0) {
+                        logger.warn("会话 {} 暂存超上限，丢弃最老 {} 条；当前 {}",
+                                sessionId, overflow, PendingCompressPolicy.describe(pendingCompress.size()));
+                    } else {
+                        logger.warn("会话 {} 摘要未生成，保留 {} 条待下次压缩", sessionId, pendingCompress.size());
+                    }
+                }
             }
         }
 

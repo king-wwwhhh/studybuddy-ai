@@ -75,6 +75,19 @@ public class MemoryService {
         }).toList();
     }
 
+    /**
+     * 按关键词召回当前会话的历史消息（供 `recallHistory` 工具使用）。
+     *
+     * <p>这是"灰区/超窗内容"的补偿通路：窗口里看不到的消息，模型可以主动来查。
+     * 目前是「全量载入 + 内存打分」，会话特别长时应改成 SQL 预过滤或 FTS5。</p>
+     */
+    public List<ChatMessage> searchMessages(String sessionId, String query, int limit) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return java.util.List.of();
+        }
+        return HistoryRecallMatcher.topMatches(loadHistory(sessionId), query, limit);
+    }
+
     public ChatSession getSession(String sessionId) {
         return jdbc.query("SELECT * FROM chat_session WHERE id=?", (rs, i) -> {
             ChatSession s = new ChatSession();
@@ -102,7 +115,9 @@ public class MemoryService {
 
     /** 超长历史摘要压缩：把多轮对话压成一段摘要，供保留关键上下文 */
     public String summarize(List<ChatMessage> messages) {
-        if (messages == null || messages.size() < 6) return "";
+        // 至少一对（user+assistant）才值得压缩：配合「移出即压缩」（trigger=2），
+        // 灰区不会因为消息太少而被静默跳过
+        if (messages == null || messages.size() < 2) return "";
         StringBuilder sb = new StringBuilder();
         for (ChatMessage m : messages) {
             sb.append(m.getRole()).append(": ").append(m.getContent()).append("\n");

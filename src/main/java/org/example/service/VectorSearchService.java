@@ -9,11 +9,13 @@ import io.milvus.param.dml.SearchParam;
 import io.milvus.response.SearchResultsWrapper;
 import lombok.Getter;
 import lombok.Setter;
+import org.example.client.IndexPlanner;
 import org.example.client.MilvusClientFactory;
 import org.example.constant.MilvusConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -40,6 +42,29 @@ public class VectorSearchService {
 
     @Autowired
     private RerankService rerankService;
+
+    /**
+     * L2 平方距离阈值：归一化向量下 L2² = 2 − 2·cos，1.2 等价 cos≈0.4（偏松）。
+     * 必须按模型重新标定，故配置化而不是写死。
+     */
+    @Value("${rag.score-threshold:1.2}")
+    private float scoreThreshold;
+
+    /** rerank 之后真正返回给调用方的片段数：召回宽度(topK) → 精排 → 取 Top rerankTopN */
+    @Value("${rag.rerank-top-n:3}")
+    private int rerankTopN;
+
+    /** 同一章节最多保留几条：其余名额让给其他章节，避免同一章的相邻段落占满上下文 */
+    @Value("${rag.max-per-chapter:2}")
+    private int maxPerChapter;
+
+    /** IVF 探测桶数（仅 IVF_FLAT 索引生效） */
+    @Value("${milvus.index.nprobe:10}")
+    private int nprobe;
+
+    /** HNSW 检索候选宽度（仅 HNSW 索引生效，运行时自动抬到 ≥ topK） */
+    @Value("${milvus.index.ef:64}")
+    private int ef;
 
     /**
      * 搜索相似文档
@@ -74,7 +99,9 @@ public class VectorSearchService {
                     .withTopK(topK)
                     .withMetricType(io.milvus.param.MetricType.L2)
                     .withOutFields(List.of("id", "content", "metadata"))
-                    .withParams("{\"nprobe\":10}")
+                    // 检索参数必须与 collection 实际索引类型匹配：IVF 传 nprobe、HNSW 传 ef、FLAT 不传
+                    .withParams(IndexPlanner.buildSearchParams(
+                            milvusClientFactory.getIndexType(), nprobe, ef, topK))
                     .build();
 
             // 3. 执行搜索
@@ -87,16 +114,22 @@ public class VectorSearchService {
             // 4. 解析搜索结果
             SearchResultsWrapper wrapper = new SearchResultsWrapper(searchResponse.getData().getResults());
             List<SearchResult> results = new ArrayList<>();
+            List<Float> rawScores = new ArrayList<>();
+            // 供「日志 → 评测输入」使用：记录 id + score，否则事后无法还原成评测样本
+            List<RetrievalEvaluator.Candidate> candidatesForLog = new ArrayList<>();
 
             for (int i = 0; i < wrapper.getRowRecords(0).size(); i++) {
                 SearchResult result = new SearchResult();
                 result.setId((String) wrapper.getIDScore(0).get(i).get("id"));
                 result.setContent((String) wrapper.getFieldData("content", 0).get(i));
                 result.setScore(wrapper.getIDScore(0).get(i).getScore());
+                rawScores.add(result.getScore()); // 先记原始分，便于校准阈值
+                candidatesForLog.add(new RetrievalEvaluator.Candidate(result.getId(), result.getScore()));
 
-                // L2 距离阈值过滤：距离过大视为无关内容，丢弃
-                if (result.getScore() > 1.2f) {
-                    logger.debug("跳过低相关结果: score={}, id={}", result.getScore(), result.getId());
+                // L2 平方距离阈值过滤（归一化向量下 L2²=2−2cos，阈值按 cos 折算后配置）
+                if (result.getScore() > scoreThreshold) {
+                    logger.debug("跳过低相关结果: score={}, threshold={}, id={}",
+                            result.getScore(), scoreThreshold, result.getId());
                     continue;
                 }
 
@@ -104,17 +137,35 @@ public class VectorSearchService {
                 Object metadataObj = wrapper.getFieldData("metadata", 0).get(i);
                 if (metadataObj != null) {
                     result.setMetadata(metadataObj.toString());
+                    // 章节路径同时抽成独立字段：工具返回给模型时可直接引用「出自哪一章」
+                    result.setHeadingPath(extractHeadingPath(result.getMetadata()));
                 }
 
                 results.add(result);
             }
 
-            // 5. 检索后重排：用专用 rerank 模型把召回结果按相关度精排（失败自动降级原列表）
+            // 4.1 分布可见性：打出候选的原始 score 区间，供按 P95 分位数/标注集校准阈值
+            if (!rawScores.isEmpty()) {
+                List<Float> sorted = new ArrayList<>(rawScores);
+                Collections.sort(sorted);
+                logger.info("检索候选 {} 条, score 区间 [{}, {}], 阈值 {}, 通过 {} 条",
+                        rawScores.size(), sorted.get(0), sorted.get(sorted.size() - 1),
+                        scoreThreshold, results.size());
+                logger.debug("检索明细: {}", RetrievalLogParser.toLogPayload(query, candidatesForLog));
+            }
+
+            // 5. 精排：召回宽度(topK) → rerank → 截断到 rerank-top-n（否则 rerank 没有挑选空间）
+            int recalled = results.size();
             if (!results.isEmpty() && rerankService.isEnabled()) {
                 results = rerankService.rerank(query, results);
             }
+            // 6. 章节多样性：同一章节最多 maxPerChapter 条（不够则按原顺序回补），
+            //    避免几条上下文名额被同一章的相邻段落占满，让跨章节的相关内容也能进来
+            results = ChapterDiversitySelector.select(
+                    results, SearchResult::getHeadingPath, rerankTopN, maxPerChapter);
 
-            logger.info("搜索完成, 找到 {} 个相似文档", results.size());
+            logger.info("搜索完成: 召回 {} 条 → 入上下文 {} 条 (rerank={})",
+                    recalled, results.size(), rerankService.isEnabled());
             return results;
 
         } catch (Exception e) {
@@ -143,6 +194,22 @@ public class VectorSearchService {
         private String content;
         private float score;
         private String metadata;
+        /** 章节路径（如「第一章 > 1.2 向量检索」），来自 metadata.heading_path；缺失为 null */
+        private String headingPath;
 
+    }
+
+    /** 从 metadata JSON 里取章节路径：解析失败返回 null，绝不影响检索主链路 */
+    static String extractHeadingPath(String metadataJson) {
+        if (metadataJson == null || metadataJson.isBlank()) {
+            return null;
+        }
+        try {
+            com.google.gson.JsonElement el = com.google.gson.JsonParser.parseString(metadataJson)
+                    .getAsJsonObject().get("heading_path");
+            return el == null || el.isJsonNull() ? null : el.getAsString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

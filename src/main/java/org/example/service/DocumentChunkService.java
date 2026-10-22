@@ -29,12 +29,18 @@ public class DocumentChunkService {
     private static final int HARD_MAX_BYTES = 8000;
 
     @Autowired
-    private DocumentChunkConfig chunkConfig;
+    DocumentChunkConfig chunkConfig; // 包可见：单测直接注入配置，不需要起 Spring 上下文
 
     /**
-     * 智能分片文档
-     * 优先按照标题、段落边界进行分割，保持语义完整性
-     * 
+     * 智能分片文档。
+     *
+     * <p>两条通道：</p>
+     * <ul>
+     *   <li><b>表格块</b>（`【表：<表名>】` + Markdown 表头 + 数据行）：按「整行」装箱，且每片都注入表名与表头
+     *       —— 否则续片只剩裸数字，看不出属于哪张表哪一列；</li>
+     *   <li><b>普通文本</b>：原有逻辑（标题 → 段落 → 字节硬切）。</li>
+     * </ul>
+     *
      * @param content 文档内容
      * @param filePath 文件路径（用于日志）
      * @return 文档分片列表
@@ -47,26 +53,54 @@ public class DocumentChunkService {
             return chunks;
         }
 
-        // 1. 首先尝试按标题分割（Markdown格式）
-        List<Section> sections = splitByHeadings(content);
-        
-        // 2. 对每个章节进行进一步分片
+        // 1. 先定位表格块：按出现顺序切开，保证「文本 → 表格 → 文本」的相对顺序不丢
+        List<TableChunker.Block> tableBlocks = TableChunker.findBlocks(content);
+        int cursor = 0;
+        for (TableChunker.Block block : tableBlocks) {
+            if (block.start > cursor) {
+                chunks.addAll(chunkPlainText(content.substring(cursor, block.start)));
+            }
+            List<String> tableChunks = TableChunker.split(block, tableChunkMaxChars());
+            for (String tableText : tableChunks) {
+                DocumentChunk chunk = new DocumentChunk(tableText, block.start, block.end, 0);
+                chunk.setTitle(block.marker); // 表名进 title → metadata，便于溯源
+                chunk.setHeadingPath(HeadingPath.append(HeadingPath.at(content, block.start), block.marker));
+                chunks.add(chunk);
+            }
+            cursor = Math.max(cursor, block.end);
+        }
+        if (cursor < content.length()) {
+            chunks.addAll(chunkPlainText(content.substring(cursor)));
+        }
+
+        // 2. 重新编号保证 chunkIndex 唯一（FileIngestService 用 source+chunkIndex 生成 Milvus 主键）
+        for (int i = 0; i < chunks.size(); i++) {
+            chunks.get(i).setChunkIndex(i);
+        }
+
+        logger.info("文档分片完成: {} -> {} 个分片（表格块 {} 个）", filePath, chunks.size(), tableBlocks.size());
+        return chunks;
+    }
+
+    /** 表格分片字符预算：给标记行 + 表头留出余量，避免一片只剩表头没数据 */
+    private int tableChunkMaxChars() {
+        return Math.max(120, chunkConfig.getMaxSize() - 100);
+    }
+
+    /** 普通文本通道：标题 → 段落 → 字节硬切（与改造前一致） */
+    private List<DocumentChunk> chunkPlainText(String text) {
+        List<DocumentChunk> chunks = new ArrayList<>();
+        if (text == null || text.trim().isEmpty()) {
+            return chunks;
+        }
+        List<Section> sections = splitByHeadings(text);
         int globalChunkIndex = 0;
         for (Section section : sections) {
             List<DocumentChunk> sectionChunks = chunkSection(section, globalChunkIndex);
             chunks.addAll(sectionChunks);
             globalChunkIndex += sectionChunks.size();
         }
-
-        // 3. 硬切超长分片（单段无换行文本 / 大数据表格导出，单段可能远超 embedding 上限 8192 token）
-        chunks = ensureMaxChunkSize(chunks);
-        // 4. 重新编号保证 chunkIndex 唯一（FileIngestService 用 source+chunkIndex 生成 Milvus 主键）
-        for (int i = 0; i < chunks.size(); i++) {
-            chunks.get(i).setChunkIndex(i);
-        }
-
-        logger.info("文档分片完成: {} -> {} 个分片", filePath, chunks.size());
-        return chunks;
+        return ensureMaxChunkSize(chunks);
     }
 
     /**
@@ -110,6 +144,7 @@ public class DocumentChunkService {
                             chunk.getStartIndex() + cut,
                             chunk.getChunkIndex());
                     piece.setTitle(chunk.getTitle());
+                    piece.setHeadingPath(chunk.getHeadingPath());
                     out.add(piece);
                 }
                 idx = cut;
@@ -143,7 +178,10 @@ public class DocumentChunkService {
     }
 
     /**
-     * 按照 Markdown 标题分割文档
+     * 按照 Markdown 标题分割文档。
+     *
+     * <p>标题行本身**不进入分片正文**：标题信息已由 `title` / `headingPath` 承载，
+     * 再让 `## 1.1 概念` 这类文本重复出现在每个分片里，只会白烧 embedding token 并稀释正文语义。</p>
      */
     private List<Section> splitByHeadings(String content) {
         List<Section> sections = new ArrayList<>();
@@ -154,35 +192,47 @@ public class DocumentChunkService {
 
         int lastEnd = 0;
         String currentTitle = null;
+        HeadingPath path = new HeadingPath();
 
         while (matcher.find()) {
             // 保存上一个章节
             if (lastEnd < matcher.start()) {
                 String sectionContent = content.substring(lastEnd, matcher.start()).trim();
                 if (!sectionContent.isEmpty()) {
-                    sections.add(new Section(currentTitle, sectionContent, lastEnd));
+                    sections.add(new Section(currentTitle, path.current(), sectionContent, lastEnd));
                 }
             }
 
-            // 更新当前标题
+            // 更新当前标题与章节路径（同名父级会被更深标题继承，同级标题互相替换）
+            path.push(matcher.group(1).length(), matcher.group(2));
             currentTitle = matcher.group(2).trim();
-            lastEnd = matcher.start();
+            // 正文从标题行之后开始 → 标题文本不再重复进分片
+            lastEnd = afterHeadingLine(content, matcher.end());
         }
 
         // 添加最后一个章节
         if (lastEnd < content.length()) {
             String sectionContent = content.substring(lastEnd).trim();
             if (!sectionContent.isEmpty()) {
-                sections.add(new Section(currentTitle, sectionContent, lastEnd));
+                sections.add(new Section(currentTitle, path.current(), sectionContent, lastEnd));
             }
         }
 
         // 如果没有找到任何标题，将整个文档作为一个章节
         if (sections.isEmpty()) {
-            sections.add(new Section(null, content, 0));
+            sections.add(new Section(null, "", content, 0));
         }
 
         return sections;
+    }
+
+    /** 标题行结束位置（跳过标题后的换行）：正文从标题行之后开始 */
+    private static int afterHeadingLine(String content, int headingEnd) {
+        int i = headingEnd;
+        while (i < content.length() && (content.charAt(i) == '\n' || content.charAt(i) == '\r')) {
+            i++;
+        }
+        return i;
     }
 
     /**
@@ -202,6 +252,7 @@ public class DocumentChunkService {
                 startChunkIndex
             );
             chunk.setTitle(title);
+            chunk.setHeadingPath(section.headingPath);
             chunks.add(chunk);
             return chunks;
         }
@@ -228,6 +279,7 @@ public class DocumentChunkService {
                     chunkIndex++
                 );
                 chunk.setTitle(title);
+            chunk.setHeadingPath(section.headingPath);
                 chunks.add(chunk);
 
                 // 开始新分片，包含重叠部分
@@ -249,6 +301,7 @@ public class DocumentChunkService {
                 chunkIndex
             );
             chunk.setTitle(title);
+            chunk.setHeadingPath(section.headingPath);
             chunks.add(chunk);
         }
 
@@ -304,11 +357,14 @@ public class DocumentChunkService {
      */
     private static class Section {
         String title;
+        /** 章节路径（如「第一章 > 1.2 向量检索」），空串表示无标题 */
+        String headingPath;
         String content;
         int startIndex;
 
-        Section(String title, String content, int startIndex) {
+        Section(String title, String headingPath, String content, int startIndex) {
             this.title = title;
+            this.headingPath = headingPath == null ? "" : headingPath;
             this.content = content;
             this.startIndex = startIndex;
         }

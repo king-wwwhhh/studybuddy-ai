@@ -226,14 +226,18 @@ public class TextExtractor {
             String t = p.getText();
             if (t != null && !t.isBlank()) sb.append(t).append('\n');
         }
+        int tableNo = 1;
         for (XWPFTable table : doc.getTables()) {
+            List<List<String>> rows = new ArrayList<>();
             for (XWPFTableRow row : table.getRows()) {
+                List<String> cells = new ArrayList<>();
                 for (XWPFTableCell cell : row.getTableCells()) {
-                    String t = cell.getText();
-                    if (t != null && !t.isBlank()) sb.append(t).append('\t');
+                    cells.add(mdCell(cell.getText()));
                 }
-                sb.append('\n');
+                if (!isBlankRow(cells)) rows.add(cells);
             }
+            if (rows.isEmpty()) continue;
+            sb.append(tableMarkdown("【表：表" + (tableNo++) + "】", rows)).append('\n');
         }
         for (XWPFHeader h : doc.getHeaderList()) {
             for (XWPFParagraph p : h.getParagraphs()) {
@@ -256,14 +260,65 @@ public class TextExtractor {
         for (int s = 0; s < wb.getNumberOfSheets(); s++) {
             Sheet sheet = wb.getSheetAt(s);
             if (sheet == null) continue;
-            sb.append('【').append(sheet.getSheetName()).append("】\n");
+            List<List<String>> rows = new ArrayList<>();
             for (Row row : sheet) {
-                for (Cell cell : row) {
-                    String v = df.formatCellValue(cell);
-                    if (v != null && !v.isBlank()) sb.append(v).append('\t');
+                List<String> cells = new ArrayList<>();
+                int last = row.getLastCellNum();
+                for (int c = 0; c < last; c++) {
+                    cells.add(mdCell(df.formatCellValue(row.getCell(c))));
                 }
-                sb.append('\n');
+                if (!isBlankRow(cells)) rows.add(cells);
             }
+            if (rows.isEmpty()) continue;
+            // 表格输出 Markdown：结构（表头/列）在抽取阶段就保住，分片阶段才能按行对齐切
+            sb.append(tableMarkdown("【表：" + sheet.getSheetName() + "】", rows)).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    // ===================== 表格 → Markdown =====================
+
+    /** 单元格文本转 Markdown 安全文本：去换行/制表，转义竖线 */
+    private static String mdCell(String v) {
+        if (v == null) return "";
+        return v.replace("\r", " ").replace("\n", " ").replace("\t", " ").trim().replace("|", "\\|");
+    }
+
+    private static boolean isBlankRow(List<String> cells) {
+        for (String c : cells) {
+            if (c != null && !c.isBlank()) return false;
+        }
+        return true;
+    }
+
+    /** 二维表 → Markdown（首行作表头；列数按最宽行对齐，缺列补空单元格） */
+    private static String tableMarkdown(String marker, List<List<String>> rows) {
+        int cols = 0;
+        for (List<String> r : rows) {
+            cols = Math.max(cols, r.size());
+        }
+        if (cols == 0) return marker;
+        StringBuilder sb = new StringBuilder(marker);
+        sb.append('\n').append(mdRow(rows.get(0), cols));
+        sb.append('\n').append(separatorRow(cols));
+        for (int i = 1; i < rows.size(); i++) {
+            sb.append('\n').append(mdRow(rows.get(i), cols));
+        }
+        return sb.toString();
+    }
+
+    private static String mdRow(List<String> cells, int cols) {
+        StringBuilder sb = new StringBuilder("|");
+        for (int c = 0; c < cols; c++) {
+            sb.append(' ').append(c < cells.size() ? cells.get(c) : "").append(" |");
+        }
+        return sb.toString();
+    }
+
+    private static String separatorRow(int cols) {
+        StringBuilder sb = new StringBuilder("|");
+        for (int c = 0; c < cols; c++) {
+            sb.append(" --- |");
         }
         return sb.toString();
     }

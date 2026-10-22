@@ -27,8 +27,8 @@ public class InternalDocsTools {
     
     private final VectorSearchService vectorSearchService;
     
-    @Value("${rag.top-k:3}")
-    private int topK = 3; // 默认值
+    @Value("${rag.top-k:10}")
+    private int topK = 10; // 默认值（召回宽度，rerank 后由 VectorSearchService 截断到 rerank-top-n）
     
     private final ObjectMapper objectMapper = Mappers.JSON;
     
