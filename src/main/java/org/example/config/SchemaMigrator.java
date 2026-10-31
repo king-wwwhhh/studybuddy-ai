@@ -36,6 +36,8 @@ public class SchemaMigrator implements CommandLineRunner {
             new String[] { "study_plan", "auto_replan_count", "INTEGER DEFAULT 0" },
             new String[] { "plan_task", "chapter", "TEXT" },
             // ===== 多用户隔离（R1）：8 张业务表统一加 user_id，旧行归 0（SYSTEM）=====
+            // ===== 登录名（可与邮箱二选一登录）=====
+            new String[] { "users", "username", "TEXT" },
             // ===== 原文件落盘（可回溯/可重解析）=====
             new String[] { "knowledge_files", "stored_path", "TEXT" },
             new String[] { "study_plan", "user_id", "INTEGER DEFAULT 0" },
@@ -87,7 +89,17 @@ public class SchemaMigrator implements CommandLineRunner {
         } catch (Exception e) {
             logger.warn("SchemaMigrator 跳过：{}", e.getMessage());
         }
-    }
+    
+        // 用户名唯一索引：必须在 username 列存在之后创建
+        // （schema.sql 里不能建，老库那时还没有这一列，会导致启动失败）
+        try {
+            jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username " +
+                    "ON users(username) WHERE username IS NOT NULL");
+            logger.info("用户名唯一索引检查完成");
+        } catch (Exception e) {
+            logger.warn("创建用户名唯一索引失败（可能有重复数据）: {}", e.getMessage());
+        }
+}
 
     /**
      * 用户维度索引（幂等）：多用户隔离后，几乎所有查询都会带 user_id 条件。
@@ -116,4 +128,5 @@ public class SchemaMigrator implements CommandLineRunner {
         }
         logger.info("用户维度索引检查完成");
     }
+
 }

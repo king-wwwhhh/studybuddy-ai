@@ -113,7 +113,7 @@ public class AdminController {
         try {
             String email = trim(body.get("email"));
             String password = trim(body.get("password"));
-            String nickname = trim(body.get("nickname"));
+            String username = trim(body.get("username"));
             String role = trim(body.get("role"));
             if (email.isEmpty() || !email.contains("@")) {
                 return ResponseEntity.ok(ApiResponse.error("邮箱格式不正确"));
@@ -125,11 +125,21 @@ public class AdminController {
             if (exists != null && exists > 0) {
                 return ResponseEntity.ok(ApiResponse.error("该邮箱已存在"));
             }
+            // 用户名：必填、唯一、不能违规
+            String nameError = org.example.auth.UsernamePolicy.validate(username);
+            if (nameError != null) {
+                return ResponseEntity.ok(ApiResponse.error(nameError));
+            }
+            Integer nameTaken = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM users WHERE LOWER(username)=LOWER(?)", Integer.class, username);
+            if (nameTaken != null && nameTaken > 0) {
+                return ResponseEntity.ok(ApiResponse.error("该用户名已被占用"));
+            }
             String finalRole = "ADMIN".equalsIgnoreCase(role) ? "ADMIN" : "USER";
             String now = LocalDateTime.now().toString();
-            jdbc.update("INSERT INTO users(email, password_hash, nickname, role, status, created_at, updated_at) VALUES(?,?,?,?, 'ACTIVE', ?, ?)",
-                    email, passwordEncoder.encode(password),
-                    nickname.isEmpty() ? email.split("@")[0] : nickname, finalRole, now, now);
+            jdbc.update("INSERT INTO users(email, username, password_hash, nickname, role, status, created_at, updated_at) " +
+                            "VALUES(?,?,?,?,?, 'ACTIVE', ?, ?)",
+                    email, username, passwordEncoder.encode(password), username, finalRole, now, now);
             logger.info("管理员创建账号: {} role={}", email, finalRole);
             return ResponseEntity.ok(ApiResponse.success(true));
         } catch (Exception e) {
@@ -147,9 +157,20 @@ public class AdminController {
                 return ResponseEntity.ok(ApiResponse.error("用户不存在"));
             }
             String now = LocalDateTime.now().toString();
-            String nickname = body.get("nickname");
-            if (nickname != null && !nickname.trim().isEmpty()) {
-                jdbc.update("UPDATE users SET nickname=?, updated_at=? WHERE id=?", nickname.trim(), now, id);
+            // 改用户名：管理员和个人都能改，但必须合规且不重复
+            String username = body.get("username");
+            if (username != null && !username.trim().isEmpty()) {
+                String name = username.trim();
+                String nameError = org.example.auth.UsernamePolicy.validate(name);
+                if (nameError != null) {
+                    return ResponseEntity.ok(ApiResponse.error(nameError));
+                }
+                Integer taken = jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM users WHERE LOWER(username)=LOWER(?) AND id<>?", Integer.class, name, id);
+                if (taken != null && taken > 0) {
+                    return ResponseEntity.ok(ApiResponse.error("该用户名已被占用"));
+                }
+                jdbc.update("UPDATE users SET username=?, nickname=?, updated_at=? WHERE id=?", name, name, now, id);
             }
             String newRole = body.get("role");
             if (newRole != null && !newRole.trim().isEmpty()) {

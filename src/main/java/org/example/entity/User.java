@@ -15,6 +15,8 @@ public class User {
 
     private Long id;
     private String email;
+    /** 登录名（唯一，可为空；为空时只能用邮箱登录） */
+    private String username;
     /** BCrypt 哈希；验证码注册的用户初始为空 */
     private String passwordHash;
     private String nickname;

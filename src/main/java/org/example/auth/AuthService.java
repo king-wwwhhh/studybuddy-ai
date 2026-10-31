@@ -106,30 +106,41 @@ public class AuthService {
         if (users.findByEmail(email).isPresent()) {
             throw new AuthException(409, "该邮箱已注册，请直接登录");
         }
-        String nickname = (req.nickname() == null || req.nickname().isBlank())
-                ? email.substring(0, email.indexOf('@'))
-                : req.nickname().trim();
+        // 用户名：必填、唯一、不能违规
+        String username = (req.nickname() == null) ? "" : req.nickname().trim();
+        String usernameError = UsernamePolicy.validate(username);
+        if (usernameError != null) {
+            throw new AuthException(400, usernameError);
+        }
+        if (users.existsUsername(username)) {
+            throw new AuthException(409, "该用户名已被占用，请换一个");
+        }
         String hash = (req.password() == null || req.password().isBlank())
                 ? null : encoder.encode(req.password());
 
         // 注册一律是普通用户。管理员只能由已有管理员在后台「设为管理员」提升，
         // 保证权限收敛（首个注册者不再自动获得最高权限）。
         String role = User.ROLE_USER;
-        long id = users.insert(email, hash, nickname, role);
-        logger.info("新用户注册: id={} email={} role={}", id, email, role);
+        // nickname 列保留兼容，但不再有"称呼"语义：直接存用户名
+        long id = users.insert(email, username, hash, username, role);
+        logger.info("新用户注册: id={} email={} username={} role={}", id, email, username, role);
 
         users.touchLogin(id);
-        return toResponse(id, email, nickname, role);
+        return toResponse(id, email, username, role);
     }
 
     /** 邮箱+密码登录 */
     public AuthDtos.AuthResponse loginWithPassword(AuthDtos.LoginRequest req) {
-        String email = VerificationCodePolicy.normalizeEmail(req.email());
-        Optional<User> found = users.findByEmail(email);
+        // 账号既可以是邮箱也可以是用户名：含 @ 按邮箱查，否则按用户名查
+        String account = req.email() == null ? "" : req.email().trim();
+        Optional<User> found = users.findByEmailOrUsername(account);
         // 统一错误信息，避免账号枚举
         if (found.isEmpty() || found.get().getPasswordHash() == null
                 || !encoder.matches(req.password() == null ? "" : req.password(), found.get().getPasswordHash())) {
-            throw new AuthException(401, "邮箱或密码错误");
+            throw new AuthException(401, "账号或密码错误");
+        }
+        if (!found.get().isActive()) {
+            throw new AuthException(403, "账号已被停用，请联系管理员");
         }
         return finishLogin(found.get());
     }

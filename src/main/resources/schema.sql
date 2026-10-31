@@ -127,6 +127,8 @@ CREATE TABLE IF NOT EXISTS knowledge_files (
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     email         TEXT    NOT NULL UNIQUE,
+    -- 登录名：唯一，可与邮箱二选一登录
+    username      TEXT    UNIQUE,
     password_hash TEXT,
     nickname      TEXT,
     role          TEXT    NOT NULL DEFAULT 'USER',

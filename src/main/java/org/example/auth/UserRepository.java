@@ -25,6 +25,7 @@ public class UserRepository {
         User u = new User();
         u.setId(rs.getLong("id"));
         u.setEmail(rs.getString("email"));
+        try { u.setUsername(rs.getString("username")); } catch (Exception ignore) { /* 老库可能没这列 */ }
         u.setPasswordHash(rs.getString("password_hash"));
         u.setNickname(rs.getString("nickname"));
         u.setRole(rs.getString("role"));
@@ -54,25 +55,53 @@ public class UserRepository {
         return list.stream().findFirst();
     }
 
+    /** 按登录名查（大小写不敏感比对） */
+    public Optional<User> findByUsername(String username) {
+        if (username == null || username.isBlank()) return Optional.empty();
+        List<User> list = jdbc.query(
+                "SELECT * FROM users WHERE LOWER(username)=LOWER(?)", ROW, username.trim());
+        return list.stream().findFirst();
+    }
+
+    /** 登录入口：邮箱或用户名任一匹配即可 */
+    public Optional<User> findByEmailOrUsername(String account) {
+        if (account == null || account.isBlank()) return Optional.empty();
+        String a = account.trim();
+        if (a.contains("@")) {
+            Optional<User> byEmail = findByEmail(a.toLowerCase());
+            if (byEmail.isPresent()) return byEmail;
+        }
+        return findByUsername(a);
+    }
+
+    /** 登录名是否已被占用 */
+    public boolean existsUsername(String username) {
+        if (username == null || username.isBlank()) return false;
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE LOWER(username)=LOWER(?)", Integer.class, username.trim());
+        return n != null && n > 0;
+    }
+
     public Optional<User> findById(long id) {
         List<User> list = jdbc.query("SELECT * FROM users WHERE id=?", ROW, id);
         return list.stream().findFirst();
     }
 
-    public long insert(String email, String passwordHash, String nickname, String role) {
+    public long insert(String email, String username, String passwordHash, String nickname, String role) {
         String now = LocalDateTime.now().toString();
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement(
-                    "INSERT INTO users(email,password_hash,nickname,role,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO users(email,username,password_hash,nickname,role,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, email);
-            ps.setString(2, passwordHash);
-            ps.setString(3, nickname);
-            ps.setString(4, role);
-            ps.setString(5, "ACTIVE");
-            ps.setString(6, now);
+            ps.setString(2, username);
+            ps.setString(3, passwordHash);
+            ps.setString(4, nickname);
+            ps.setString(5, role);
+            ps.setString(6, "ACTIVE");
             ps.setString(7, now);
+            ps.setString(8, now);
             return ps;
         }, keys);
         Number key = keys.getKey();
