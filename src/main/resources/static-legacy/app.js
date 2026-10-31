@@ -127,7 +127,9 @@ class StudyBuddyApp {
             { id: 'qwen-flash', name: 'Qwen-Flash（最快）', builtin: true }
         ];
         this.customModels = this.loadCustomModels();
-        this.sessionId = this.generateSessionId();
+        // 会话 id 持久化：刷新页面要回到同一个会话，否则对话记录会"丢"
+        this.sessionId = this.loadSessionId() || this.generateSessionId();
+        this.persistSessionId();
         this.isBusy = false;
         this.currentChatHistory = [];
         this.chatHistories = this.loadChatHistories();
@@ -146,6 +148,8 @@ class StudyBuddyApp {
     bindFx() { /* no-op；保留以防有子类需要扩展；副作用由底部 IIFE 自动绑定 */ }
 
     async init() {
+        // 刷新后恢复上次会话（sessionId 已持久化）
+        this.restoreLastSession();
         // 先以演示数据立即渲染，保证离线/独立预览秒开
         this.renderDemo();
         // 立即填充模型下拉（demo 列表）；后端可达时会被真实列表覆盖
@@ -361,6 +365,41 @@ class StudyBuddyApp {
     sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
     escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
     generateSessionId() { return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now(); }
+
+    /** 读取已保存的会话 id（刷新后延续同一会话，而不是每次新建） */
+    loadSessionId() {
+        try { return localStorage.getItem('sb_session_id') || null; } catch (e) { return null; }
+    }
+
+    /** 持久化当前会话 id */
+    persistSessionId() {
+        try { localStorage.setItem('sb_session_id', this.sessionId); } catch (e) { /* 隐私模式忽略 */ }
+    }
+
+    /**
+     * 页面加载后恢复上次会话的消息。
+     * sessionId 持久化保证"还是那个会话"，这里保证"消息也一起回来"。
+     */
+    async restoreLastSession() {
+        try {
+            await new Promise(r => setTimeout(r, 1500)); // 等 probeBackend 切到 live
+            if (!this.sessionId || this.demo) return;
+            const data = await this.api('/memory/sessions/' + this.sessionId, {});
+            const messages = Array.isArray(data) ? data : ((data && data.messages) || []);
+            if (!messages.length) return;
+            const box = document.getElementById('chatMessages');
+            if (!box) return;
+            box.innerHTML = '';
+            const w = document.getElementById('welcomeCard');
+            if (w) w.style.display = 'none';
+            for (const msg of messages) {
+                this.addMsg(msg.role === 'user' ? 'user' : 'assistant', msg.content || '', { raw: true });
+            }
+            console.log('[restore] 已恢复', messages.length, '条历史消息');
+        } catch (e) {
+            console.warn('[restoreLastSession]', e && e.message);
+        }
+    }
     toast(msg, type = 'info', duration = 3200) {
         const n = document.createElement('div');
         n.className = 'toast ' + type; n.textContent = msg;
@@ -641,6 +680,26 @@ class StudyBuddyApp {
         document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
         document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
         const el = document.getElementById('view-' + view); if (el) el.classList.add('active');
+            // 切视图时刷新数据：AI 在对话里建了计划/传了知识库后，切过去要立刻看到，
+        // 否则必须手动刷新浏览器（刷完对话又变成新的，体验很差）。
+        this.refreshViewData(view);
+    }
+
+    /** 按视图拉取最新数据（fire-and-forget，失败只提示不阻塞切换） */
+    refreshViewData(view) {
+        try {
+            if (view === 'plans') {
+                if (typeof this.loadPlans === 'function') this.loadPlans();
+            } else if (view === 'knowledge') {
+                if (typeof this.loadKnowledge === 'function') this.loadKnowledge();
+            } else if (view === 'profile') {
+                if (typeof this.loadProfile === 'function') this.loadProfile();
+            } else if (view === 'chat') {
+                if (typeof this.loadSessions === 'function' && !this.demo) this.loadSessions();
+            }
+        } catch (e) {
+            console.warn('[refreshViewData]', view, e && e.message);
+        }
     }
 
     /* ---------- 对话 ---------- */
@@ -1648,7 +1707,7 @@ class StudyBuddyApp {
     renderHistorySidebar() {}
     newChat() {
         if (this.isBusy) { this.toast('请等待当前对话完成', 'warning'); return; }
-        this.sessionId = this.generateSessionId(); this.currentChatHistory = [];
+        this.sessionId = this.generateSessionId(); this.persistSessionId(); this.currentChatHistory = [];
         document.getElementById('chatMessages').innerHTML = '';
         const w = document.getElementById('welcomeCard'); if (w) w.style.display = '';
         this.toast('已开始新对话', 'info');
