@@ -112,3 +112,18 @@ CREATE TABLE IF NOT EXISTS knowledge_files (
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL
 );
+
+-- ============ 认证与权限 ============
+-- 角色：USER / ADMIN；status：ACTIVE / DISABLED
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email         TEXT    NOT NULL UNIQUE,
+    password_hash TEXT,
+    nickname      TEXT,
+    role          TEXT    NOT NULL DEFAULT 'USER',
+    status        TEXT    NOT NULL DEFAULT 'ACTIVE',
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT    NOT NULL,
+    last_login_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

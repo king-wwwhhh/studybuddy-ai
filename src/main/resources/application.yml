@@ -71,6 +71,24 @@ milvus:
     auto-rebuild: ${MILVUS_INDEX_AUTO_REBUILD:false}
 
 spring:
+# QQ 邮箱 SMTP：password 必须是"授权码"（QQ邮箱 → 设置 → 账户 → 开启SMTP → 生成授权码），不是登录密码
+  # 未配置 username 时自动进入开发模式：验证码打印到日志，注册流程照常可用
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:465}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    protocol: smtp
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+          connectiontimeout: 10000
+          timeout: 10000
+          writetimeout: 10000
   autoconfigure:
     # 排除全部 DashScope 自动配置：它们会在 DASHSCOPE_API_KEY 为空/缺失时于启动期抛异常，
     # 导致健康检查失败。应用全部手动构建 DashScope 模型（ChatModelFactory/RerankService/VectorEmbeddingService），
@@ -156,3 +174,13 @@ rerank:
   enabled: true
   base-url: https://dashscope.aliyuncs.com
   model: gte-rerank-v2
+
+# 认证与权限：JWT 密钥（生产必须用环境变量注入）、token 有效期、BCrypt 强度
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET:}
+    ttl-hours: ${AUTH_JWT_TTL_HOURS:24}
+  bcrypt-cost: ${AUTH_BCRYPT_COST:10}
+  mail:
+    # 未配置 SMTP 时是否把验证码打到日志（仅开发环境开启）
+    dev-log-fallback: ${AUTH_MAIL_DEV_FALLBACK:true}
