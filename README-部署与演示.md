@@ -109,6 +109,8 @@ curl http://localhost:9900/api/health
 | 日志出现 `url error, please check url` | 该模型在此端点不可用（实测 `qwen3.5-flash` 会报） | 启动日志会列出「可用=[...]」，换用其中的模型；`chat.model` 留空则自动选 |
 | `/api/milvus/health` 404 | 该端点实际路径是 `/milvus/health`（无 `/api` 前缀） | 用 `curl http://localhost:9900/milvus/health` |
 | 上传成功但 `status: READY` 且 message 含「Milvus 降级」 | Milvus 未启动，降级模式只做解析不写向量 | 启动 Milvus 后重新上传，或接受降级（其余功能正常） |
+| 启动日志 WARN「索引类型从 IVF_FLAT 变更为 FLAT：默认不自动重建」 | 已有 collection 用旧索引，配置期望按数据量选 FLAT | **行为正确**（检索会按实际 IVF_FLAT 传 nprobe）。要切换：`milvus.index.auto-rebuild=true` 重启，或手工 dropIndex |
+| `docker compose up` 提示 `a network with name milvus exists` | 之前创建过同名网络 | 只是警告，容器照常启动；消除可加 `external: true` |
 | 收不到验证码 | 未配 SMTP | 从 `target/app.log` 搜 `code=` |
 | 重启后登录态失效 | 未配 `AUTH_JWT_SECRET`（用了随机密钥） | 配置固定密钥 |
 | 知识库上传后检索不到 | Milvus 未启动 → 降级模式 | 启动 `docker compose -f vector-database.yml up -d` |
@@ -126,11 +128,13 @@ curl http://localhost:9900/api/health
 | **流式对话** | `POST /api/chat_stream` → **18 个 content 增量块 + 1 个 done**，耗时 4.6s，回答 98 字 |
 | 前端聊天页 | Playwright 验证：回复渲染 + **「通用学伴」Agent 徽标** + 会话列表，0 控制台错误 |
 | 文档上传 | `POST /api/knowledge/upload` → 解析出 **2 个分片**，状态 READY |
-| Milvus | **未启动**（`/milvus/health` → 503 DEGRADED），向量写入自动降级，上传仍成功 |
+| Milvus | **已启动** → `/milvus/health` → `{"collections":["biz"],"message":"ok"}` |
+| **RAG 全链路** | 上传 `_rag_doc.md` → **摄取成功**（2 分片写入 Milvus）→ 提问「IVF_FLAT 和 HNSW 区别」→ Agent 路由 **study（答疑导师）**，**22s** 返回索引对比回答，命中知识库 |
 | 后端测试 | 143 例全绿 |
 | E2E 回归 | 23 条断言全通过 |
 
-> 注：本机未启动 Milvus，所以 RAG 检索链路未做端到端验证；配好 Milvus 后可用同一份文档验证"上传→检索→带出处回答"。
+> Milvus 启动：`docker compose -f vector-database.yml up -d`（etcd + minio + milvus + attu，约 1 分钟全部 healthy）。
+> 端口：19530（SDK）/ 9091（健康检查）/ 8000（Attu 管理界面）。
 
 ## 八、测试与验收
 
