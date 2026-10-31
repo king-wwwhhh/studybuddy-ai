@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS chat_message (
 );
 
 CREATE TABLE IF NOT EXISTS learner_profile (
-    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
     name           TEXT,
     subjects       TEXT,
     exam_date      TEXT,
@@ -127,3 +127,5 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+-- 画像改为每人一行（R2）：通过 user_id 唯一索引保证一个用户只有一份画像
+CREATE UNIQUE INDEX IF NOT EXISTS uq_learner_profile_user ON learner_profile(user_id);
