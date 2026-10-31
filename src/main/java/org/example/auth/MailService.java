@@ -31,6 +31,10 @@ public class MailService {
     @Value("${auth.mail.dev-log-fallback:true}")
     private boolean devLogFallback;
 
+    /** 当前激活的 profile：prod 下禁止"验证码写日志"的降级 */
+    @Value("${spring.profiles.active:default}")
+    private String activeProfile;
+
     public MailService(ObjectProvider<JavaMailSender> mailSenderProvider) {
         this.mailSenderProvider = mailSenderProvider;
     }
@@ -53,6 +57,14 @@ public class MailService {
 
         JavaMailSender sender = mailSenderProvider.getIfAvailable();
         if (sender == null || from == null || from.isBlank()) {
+            // 安全保护：生产环境不允许把验证码写进日志
+            // （日志可能被运维/第三方日志平台看到，等于泄露验证码）
+            boolean isProd = "prod".equalsIgnoreCase(activeProfile);
+            boolean allowDevFallback = devLogFallback && !isProd;
+            if (!allowDevFallback) {
+                logger.error("未配置 SMTP 且当前 profile={} 不允许降级，验证码无法发送：to={}", activeProfile, to);
+                return false;
+            }
             if (devLogFallback) {
                 logger.warn("[开发模式] 未配置 SMTP，验证码输出到日志：to={} purpose={} code={}", to, purpose, code);
                 return true;

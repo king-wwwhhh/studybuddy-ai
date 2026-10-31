@@ -138,3 +138,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 -- 画像改为每人一行（R2）：通过 user_id 唯一索引保证一个用户只有一份画像
 CREATE UNIQUE INDEX IF NOT EXISTS uq_learner_profile_user ON learner_profile(user_id);
+
+-- 系统级开关（key-value）
+CREATE TABLE IF NOT EXISTS system_settings (
+    setting_key   TEXT PRIMARY KEY,
+    setting_value TEXT,
+    updated_at    TEXT
+);

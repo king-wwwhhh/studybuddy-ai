@@ -50,6 +50,14 @@ public class SchemaMigrator implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
+        // 系统开关表（老库补建）
+        try {
+            jdbc.execute("CREATE TABLE IF NOT EXISTS system_settings (" +
+                    "setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at TEXT)");
+            logger.info("系统开关表检查完成");
+        } catch (Exception e) {
+            logger.warn("创建 system_settings 失败: {}", e.getMessage());
+        }
         if (jdbc == null) return;
         try {
             // 只对已存在的表做迁移，避免新建库时 CREATE TABLE 已含列后再 ADD 失败

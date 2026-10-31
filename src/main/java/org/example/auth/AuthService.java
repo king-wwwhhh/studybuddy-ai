@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -22,6 +23,9 @@ import java.util.Optional;
  */
 @Service
 public class AuthService {
+
+    @Autowired
+    private org.example.service.SystemSettingService systemSettingService;
 
     private static final Logger logger = LoggerFactory.getLogger(AuthService.class);
 
@@ -58,6 +62,10 @@ public class AuthService {
 
     /** 发送验证码；频率/额度超限抛 429 */
     public void sendCode(String rawEmail, String purpose) {
+        // 关闭注册时，注册用途的验证码也不发（否则用户拿到码却注册不了，体验割裂）
+        if ("REGISTER".equalsIgnoreCase(purpose) && !systemSettingService.isRegistrationOpen()) {
+            throw new AuthException(403, "管理员已暂停新用户注册");
+        }
         String email = VerificationCodePolicy.normalizeEmail(rawEmail);
         if (!VerificationCodePolicy.isValidEmail(email)) {
             throw new AuthException(400, "邮箱格式不正确");
