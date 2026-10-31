@@ -17,7 +17,7 @@ import java.sql.SQLException;
 import java.util.List;
 
 /**
- * 知识库接口：上传（推送 GitHub 真源 + 向量化）、同步重建、列表。
+ * 知识库接口：上传（解析 + 切片 + 向量化）、列表、删除。
  */
 @RestController
 @RequestMapping("/api/knowledge")
@@ -50,19 +50,7 @@ public class KnowledgeController {
         }
     }
 
-    /** 从 GitHub 拉取最新并重建向量（按 sha 跳过未变更文件） */
-    @PostMapping("/sync")
-    public ResponseEntity<ApiResponse<FileIngestService.SyncResult>> sync() {
-        try {
-            FileIngestService.SyncResult result = fileIngestService.syncAll();
-            return ResponseEntity.ok(ApiResponse.success(result));
-        } catch (Exception e) {
-            logger.error("知识库同步异常", e);
-            return ResponseEntity.ok(ApiResponse.error(e.getMessage()));
-        }
-    }
-
-    /** 删除知识库文件：删本地 Milvus 向量 + SQLite 记录（GitHub 真源备份保留） */
+    /** 删除知识库文件：删 Milvus 向量 + SQLite 记录 */
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Boolean>> delete(@PathVariable Long id) {
         try {

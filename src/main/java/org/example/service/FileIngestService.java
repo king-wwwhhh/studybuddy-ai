@@ -58,15 +58,13 @@ public class FileIngestService {
     private VectorEmbeddingService embeddingService;
     @Autowired
     private DocumentChunkService chunkService;
-    @Autowired
-    private GithubService githubService;
+
     @Autowired
     private TextExtractor textExtractor;
     @Autowired
     private JdbcTemplate jdbc;
 
-    @Value("${github.repo-url:}")
-    private String repoUrl;
+
 
     /** 写入后读回校验的抽样条数：0 或负数表示关闭校验 */
     @Value("${rag.verify-sample-size:20}")
@@ -80,10 +78,10 @@ public class FileIngestService {
     @Value("${rag.verify-retry-base-ms:200}")
     private long verifyRetryBaseMs = VerifyRetryPolicy.DEFAULT_BASE_MILLIS;
 
-    /** 摄取单个上传文件：推 GitHub（best-effort 真源）+ 向量化 + 落库 */
+    /** 摄取单个上传文件：抽取 + 切片 + 向量化 + 落库 */
     public IngestResult ingest(MultipartFile file, String subPath) {
         IngestResult result = new IngestResult();
-        boolean githubOk = true;
+
         try {
             String original = file.getOriginalFilename();
             if (original == null || original.isEmpty()) {
@@ -91,9 +89,9 @@ public class FileIngestService {
             }
             byte[] data = file.getBytes();
             String repoPath = buildRepoPath(original, subPath);
-            String sha = githubService.sha256(data);
+            String sha = sha256Hex(data);
 
-            // 0. 同内容文件已摄取过 → 跳过（不推 GitHub、不抽取、不嵌入，防止重试/重复上传白烧配额）
+            // 0. 同内容文件已摄取过 → 跳过（不抽取、不嵌入，防止重试/重复上传白烧配额）
             if (alreadyIngested(sha)) {
                 logger.info("文件内容已存在（sha={}），跳过重复摄取: {}", sha, original);
                 result.fileName = original;
@@ -104,14 +102,6 @@ public class FileIngestService {
                 result.partial = false;
                 result.message = "文件内容已存在，跳过重复摄取（未消耗嵌入配额）";
                 return result;
-            }
-
-            // 1. 推送到 GitHub 真源（best-effort：pushFile 内部已降级，但兜底再 catch 一次）
-            try {
-                githubService.pushFile(data, repoPath, "add knowledge: " + original);
-            } catch (Exception ge) {
-                githubOk = false;
-                logger.warn("GitHub 真源推送降级（其余链路继续）: {}", ge.getMessage());
             }
 
             // 2. 抽取文本
@@ -144,7 +134,7 @@ public class FileIngestService {
                     List<List<Float>> vectors = embeddingService.generateEmbeddings(texts);
                     for (int i = 0; i < batch.size(); i++) {
                         insertCounts.add(insertChunk(batch.get(i), vectors.get(i), safeSource, original,
-                                extension(original), sha, repoUrl, total, ownerId));
+                                extension(original), sha, "", total, ownerId));
                     }
                     logger.info("已向量化分片 {}/{} : {}", Math.min(end, total), total, repoPath);
                 }
@@ -179,7 +169,7 @@ public class FileIngestService {
             result.partial = er.partial;
             result.message = (milvusClient == null ? "（Milvus 降级：未写入向量库）" : "")
                     + (er.partial ? "文本为尽力抽取（PDF 可能不完整），建议补充可复制文本版本" : "摄取成功")
-                    + (githubOk ? "" : "（GitHub 真源推送失败，数据已写入本地；可手动 push）");
+;
             return result;
 
         } catch (Exception e) {
@@ -187,38 +177,6 @@ public class FileIngestService {
             result.status = "FAILED";
             result.message = e.getMessage();
             return result;
-        }
-    }
-
-    /** 从 GitHub 拉取最新并重建所有文件向量（按 sha 跳过未变更） */
-    public SyncResult syncAll() {
-        SyncResult sr = new SyncResult();
-        try {
-            githubService.pull();
-            List<String> files = githubService.listFiles();
-            sr.total = files.size();
-            for (String rel : files) {
-                try {
-                    byte[] data = githubService.readFile(rel);
-                    String sha = githubService.sha256(data);
-                    String prevSha = querySha(rel);
-                    if (sha.equals(prevSha)) {
-                        sr.skipped++;
-                        continue;
-                    }
-                    // 重新摄取：复用 ingest 逻辑（不重复推 GitHub）
-                    reingest(rel, data, sha);
-                    sr.reindexed++;
-                } catch (Exception e) {
-                    sr.failed++;
-                    sr.errors.add(rel + ": " + e.getMessage());
-                    logger.warn("同步单文件失败: {} -> {}", rel, e.getMessage());
-                }
-            }
-            return sr;
-        } catch (Exception e) {
-            sr.message = e.getMessage();
-            return sr;
         }
     }
 
@@ -243,7 +201,7 @@ public class FileIngestService {
                 List<List<Float>> vectors = embeddingService.generateEmbeddings(texts);
                 for (int i = 0; i < batch.size(); i++) {
                     insertCounts.add(insertChunk(batch.get(i), vectors.get(i), safeSource, original,
-                            extension(original), sha, repoUrl, total, ownerId));
+                            extension(original), sha, "", total, ownerId));
                 }
             }
             // 先写后删：写入不完整就保留旧向量（同步路径失败会让整个 sync 记一次失败，但数据不丢）
@@ -511,6 +469,26 @@ public class FileIngestService {
         return removed;
     }
 
+    /**
+     * 内容 sha256（本地计算）。
+     * 原先借用 GithubService.sha256；GitHub 同步功能移除后改为本地实现，语义不变：
+     * 同内容得到同一 sha，用于「重复上传判重」与「版本化主键」。
+     */
+    private static String sha256Hex(byte[] data) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(data);
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("计算 sha256 失败", e);
+        }
+    }
+
     /** Milvus VARCHAR 按 UTF-8 字节计数：超 8000 字节的 content 按合法字符边界截断，防止 insert 超限失败 */
     private static String fitMilvusContent(String content) {
         if (content == null || content.isEmpty()) return content;
@@ -523,7 +501,7 @@ public class FileIngestService {
         return new String(bytes, 0, end, StandardCharsets.UTF_8);
     }
 
-    /** 删除知识库文件：删 Milvus 向量 + 删 SQLite 记录（GitHub 真源备份保留）。返回是否找到并删除。 */
+    /** 删除知识库文件：删 Milvus 向量 + 删 SQLite 记录。返回是否找到并删除。 */
     public boolean deleteFile(Long id) {
         // 归属校验（R4）：只能删除当前用户可见的文件记录
         String repoPath = jdbc.query(
@@ -582,7 +560,7 @@ public class FileIngestService {
         } else {
             jdbc.update("INSERT INTO knowledge_files(file_name, repo, repo_path, file_sha, chunks, size_bytes, status, created_at, updated_at, user_id) " +
                             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    fileName, repoUrl, repoPath, sha, chunks, size, status, now, now,
+                    fileName, "", repoPath, sha, chunks, size, status, now, now,
                     OwnerSupport.currentUserId());
         }
     }
@@ -671,12 +649,4 @@ public class FileIngestService {
         public String message;
     }
 
-    public static class SyncResult {
-        public int total;
-        public int reindexed;
-        public int skipped;
-        public int failed;
-        public String message;
-        public List<String> errors = new ArrayList<>();
-    }
 }

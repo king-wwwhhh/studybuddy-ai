@@ -1,3 +1,6 @@
+// 归档：GitHub 知识库同步功能于本轮移除，保留源码备查（未参与编译）
+// 如需恢复：移回 src/main/java/org/example/service/ 并恢复 FileIngestService 中的调用
+
 package org.example.service;
 
 import org.slf4j.Logger;

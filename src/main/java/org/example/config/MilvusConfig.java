@@ -30,7 +30,7 @@ public class MilvusConfig {
      * 容错策略：若 Milvus 不可达（本地未启动 Docker、或云实例不可用），
      * 不再中断整个应用启动，而是返回 null，由 VectorIndexService /
      * VectorSearchService 在 client 为 null 时降级处理，保证其余功能
-     * （计划、打卡、测验、记忆、GitHub 知识库同步）仍可正常工作。
+     * （计划、打卡、测验、记忆、知识库）仍可正常工作。
      * 
      * @return MilvusServiceClient 实例，不可用时为 null
      */
