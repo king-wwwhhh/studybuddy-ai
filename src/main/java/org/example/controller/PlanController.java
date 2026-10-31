@@ -142,10 +142,16 @@ public class PlanController {
         return ok(ApiResponse.success(m));
     }
 
-    /** 删除计划（含任务 / 打卡 / 薄弱点） */
+    /**
+     * 删除计划（含任务 / 打卡 / 薄弱点）。
+     * 不属于当前用户（或不存在）时返回 404 语义，**不能报成功** —— 否则前端会以为删掉了。
+     */
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Map<String, Object>>> delete(@PathVariable Long id) {
-        planService.deletePlan(id);
+        int deleted = planService.deletePlan(id);
+        if (deleted <= 0) {
+            return ResponseEntity.status(404).body(ApiResponse.error("计划不存在或无权删除"));
+        }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("deleted", id);
         return ok(ApiResponse.success(m));

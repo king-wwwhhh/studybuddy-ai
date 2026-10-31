@@ -83,8 +83,8 @@ public class KnowledgeController {
         try {
             List<KnowledgeFile> rows = jdbc.query(
                     "SELECT id,file_name,repo,repo_path,file_sha,chunks,size_bytes,status,created_at,updated_at " +
-                            "FROM knowledge_files WHERE " + OwnerSupport.visibleScope("user_id") + " " +
-                            "FROM knowledge_files ORDER BY updated_at DESC", ROW_MAPPER);
+                            "FROM knowledge_files WHERE " + OwnerSupport.visibleScope("user_id") +
+                            " ORDER BY updated_at DESC", ROW_MAPPER);
             return ResponseEntity.ok(ApiResponse.success(rows));
         } catch (Exception e) {
             logger.error("知识库列表异常", e);
