@@ -1373,7 +1373,33 @@ class StudyBuddyApp {
 }
 
 
+/* ===== 登录态展示与退出（多用户改造新增） ===== */
+function initUserChip() {
+    const nameEl = document.getElementById('userName');
+    const btn = document.getElementById('logoutBtn');
+    const chip = document.getElementById('userChip');
+    let user = null;
+    try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch (e) {}
+
+    if (!user || !localStorage.getItem('token')) {
+        // 未登录：直接回登录页，避免停在空白界面
+        location.replace('/#/login');
+        return;
+    }
+    if (nameEl) nameEl.textContent = user.nickname || user.email || ('用户 ' + (user.userId || ''));
+    chip && chip.setAttribute('title', (user.email || '') + (user.role === 'ADMIN' ? '（管理员）' : ''));
+
+    btn && btn.addEventListener('click', async () => {
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('lastSessionId');
+        location.replace('/#/login');
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+    initUserChip();
     window.__app = new StudyBuddyApp();
     // 首屏显式激活对话视图：.view 默认 display:none，
     // 不激活会导致 chat 区（含模型胶囊、输入框）整块不可见。

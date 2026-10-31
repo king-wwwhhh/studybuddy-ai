@@ -59,6 +59,12 @@
             </nav>
 
             <div class="nav-foot">
+                <!-- 当前登录用户 + 退出（旧版无登录体系，多用户改造后新增） -->
+                <div class="user-chip" id="userChip">
+                    <span class="user-dot"></span>
+                    <span class="user-name" id="userName">未登录</span>
+                    <button class="logout-btn" id="logoutBtn" title="退出登录">退出</button>
+                </div>
                 <button class="agent-pill" id="activeAgentPill" title="当前回答你的 Agent（自动路由时由主管实时决策）">
                     <span class="dot"></span><span id="activeAgentText">🤖 自动路由</span>
                 </button>

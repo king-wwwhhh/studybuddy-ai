@@ -531,3 +531,28 @@ body {
     .agent-group { width: 100%; }
     .chat-input-bar { padding: 12px 12px; }
 }
+
+
+/* ===== 当前登录用户 + 退出（多用户改造新增） ===== */
+.user-chip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; margin-bottom: 8px;
+    background: var(--glass); border: 1px solid var(--border);
+    border-radius: 12px; font-size: 12.5px;
+}
+.user-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ok); box-shadow: 0 0 10px var(--ok); flex: none;
+}
+.user-name {
+    flex: 1; min-width: 0; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.logout-btn {
+    flex: none; padding: 4px 10px; border-radius: 8px; cursor: pointer;
+    font-size: 12px; font-weight: 600;
+    background: rgba(248,113,113,.12); color: var(--err);
+    border: 1px solid rgba(248,113,113,.32);
+    transition: all .18s ease;
+}
+.logout-btn:hover { background: rgba(248,113,113,.22); transform: translateY(-1px); }
