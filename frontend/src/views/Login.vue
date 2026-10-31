@@ -95,9 +95,12 @@ async function sendCode(purpose, email) {
 function afterLogin(data) {
   auth.save(data)
   ElMessage.success('登录成功')
-  // 管理员默认进「用户管理」，普通用户进「学习看板」
-  const fallback = data.role === 'ADMIN' ? '/admin' : '/dashboard'
-  router.replace(route.query.redirect || fallback)
+  // 管理员进 Vue 管理后台；普通用户进旧版单页（功能完整、含旧动效）
+  if (data.role === 'ADMIN') {
+    router.replace('/admin')
+  } else {
+    window.location.href = '/legacy/'
+  }
 }
 
 async function doLogin() {

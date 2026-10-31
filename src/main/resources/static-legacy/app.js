@@ -1,3 +1,24 @@
+/* ===== 鉴权注入：与 Vue 登录页共用 localStorage.token ===== */
+(function patchFetch() {
+    const orig = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+        const opts = init || {};
+        const token = localStorage.getItem('token') || '';
+        if (token) {
+            const headers = new Headers(opts.headers || {});
+            if (!headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
+            opts.headers = headers;
+        }
+        return orig(input, opts).then((res) => {
+            if (res.status === 401) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                location.replace('/#/login');
+            }
+            return res;
+        });
+    };
+})();
 // 期末速成助手 前端应用（手写 SPA）
 // 设计要点：
 //  1) 完全自包含，不依赖任何外网 CDN（内置轻量 Markdown 解析）
@@ -22,10 +43,10 @@ class StudyBuddyApp {
         this.selectedModel = '';
         this.BUILTIN_MODELS = [
             { id: '', name: '默认模型', builtin: true },
-            { id: 'qwen3.7-max', name: 'Qwen3.7-Max（旗舰）', builtin: true },
-            { id: 'qwen-max', name: 'Qwen-Max（经典旗舰）', builtin: true },
-            { id: 'qwen-plus', name: 'Qwen-Plus（均衡）', builtin: true },
-            { id: 'qwen-flash', name: 'Qwen-Flash（最快）', builtin: true }
+            { id: 'qwen3-max', name: 'Qwen3-Max（最强）', builtin: true },
+            { id: 'qwen3-30b-a3b-thinking-2507', name: 'Qwen3-30B 思维版', builtin: true },
+            { id: 'qwen3-plus', name: 'Qwen3-Plus', builtin: true },
+            { id: 'qwen3-turbo', name: 'Qwen3-Turbo（最快）', builtin: true }
         ];
         this.customModels = this.loadCustomModels();
         this.sessionId = this.generateSessionId();
@@ -352,7 +373,6 @@ class StudyBuddyApp {
             return { message: name + ' 已入库（演示）' };
         }
         if (path === '/knowledge/sync' && method === 'POST') return { message: '已同步（演示）' };
-        if (/^\/knowledge\/.+$/.test(path) && method === 'DELETE') return true;
 
         if (path === '/plans' && method === 'GET') return this.store.plans;
         if (path === '/plans' && method === 'POST') { const p = this.makePlan(body); this.store.plans.unshift(p); this.persist(); return p; }
@@ -392,11 +412,11 @@ class StudyBuddyApp {
         if (path === '/profile' && method === 'GET') return this.store.profile;
         if (path === '/profile' && method === 'PUT') { this.store.profile = Object.assign({}, this.store.profile, body); this.persist(); return this.store.profile; }
         if (path === '/memory/sessions') return { sessions: this.store.sessions };
-        if (path === '/models' && method === 'GET') return { current: 'qwen3.7-max', models: [
-            { id: 'qwen3.7-max', name: 'Qwen3.7-Max（旗舰）', description: '通义千问旗舰' },
-            { id: 'qwen-max', name: 'Qwen-Max', description: '经典旗舰' },
-            { id: 'qwen-plus', name: 'Qwen-Plus', description: '均衡性价比' },
-            { id: 'qwen-flash', name: 'Qwen-Flash（最快）', description: '极速响应' }
+        if (path === '/models' && method === 'GET') return { current: 'qwen3-max', models: [
+            { id: 'qwen3-max', name: 'Qwen3-Max（最强）', description: '通义千问最强旗舰' },
+            { id: 'qwen3-30b-a3b-thinking-2507', name: 'Qwen3-30B 思维版', description: '轻量思维模型' },
+            { id: 'qwen3-plus', name: 'Qwen3-Plus', description: '均衡性价比' },
+            { id: 'qwen3-turbo', name: 'Qwen3-Turbo（最快）', description: '极速响应' }
         ] };
         return null;
     }
@@ -515,10 +535,6 @@ class StudyBuddyApp {
         document.getElementById('cpCancel').addEventListener('click', () => this.closeCreatePlanModal());
         document.getElementById('cpSubmit').addEventListener('click', () => this.submitCreatePlan());
         document.getElementById('createPlanModal').addEventListener('click', e => { if (e.target.id === 'createPlanModal') this.closeCreatePlanModal(); });
-        document.getElementById('checkinModalClose').addEventListener('click', () => this.closeCheckinModal());
-        document.getElementById('ciCancel').addEventListener('click', () => this.closeCheckinModal());
-        document.getElementById('ciSubmit').addEventListener('click', () => this.submitCheckin());
-        document.getElementById('checkinModal').addEventListener('click', e => { if (e.target.id === 'checkinModal') this.closeCheckinModal(); });
 
         // AI 规划（详细表单）
         document.getElementById('aiPlanModalClose').addEventListener('click', () => this.closeAiPlanModal());
@@ -872,12 +888,6 @@ class StudyBuddyApp {
     /* ---------- 知识库 ---------- */
     async uploadKnowledge(file) {
         if (!file) return;
-        // 后端限制 100MB（application.yml spring.servlet.multipart.max-file-size），提前拦截，避免 413 空响应
-        const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-        if (file.size > MAX_UPLOAD_BYTES) {
-            this.toast('文件过大：超过 100MB 限制', 'error');
-            return;
-        }
         this._pendingUploadName = file.name;
         this.showOverlay(true, '上传到知识库…', file.name);
         try {
@@ -898,7 +908,6 @@ class StudyBuddyApp {
                 let data = null;
                 try { data = JSON.parse(txt); } catch (_) { data = { raw: txt }; }
                 // 后端 ApiResponse 形态：{code:500, message:'...', data:null} 表示失败
-                if (res.status === 413) throw new Error('文件过大，超过服务器限制（最大 100MB）');
                 if (res.status >= 400) throw new Error('HTTP ' + res.status + ' ' + (data && data.message ? data.message : ''));
                 if (data && data.code === 500) throw new Error(data.message || '上传失败');
                 const payload = data && data.data;
@@ -945,29 +954,8 @@ class StudyBuddyApp {
                         <div class="kb-sub">${f.chunkCount || f.chunks || 0} 段 · ${this.fmtSize(sz(f))} · ${f.uploadedAt || fmtDate(f.updatedAt) || ''}</div>
                     </div>
                     <span class="kb-status ${(f.status === 'READY') ? 'ok' : 'warn'}">${f.status === 'READY' ? '已向量化' : (f.status || '处理中')}</span>
-                    <button class="kb-del" data-kbdel="${f.id != null ? f.id : ''}" data-name="${this.escapeHtml(f.fileName)}" title="删除该文件">🗑</button>
                 </div>`).join('');
-            list.querySelectorAll('[data-kbdel]').forEach(b => b.addEventListener('click', () => this.deleteKnowledge(b.dataset.kbdel, b.dataset.name)));
         } catch (e) { list.innerHTML = '<div class="empty">加载失败：' + this.escapeHtml(e.message) + '</div>'; }
-    }
-    async deleteKnowledge(id, name) {
-        if (!confirm('确定删除「' + name + '」？将从本地知识库移除向量与记录（GitHub 备份保留）。')) return;
-        try {
-            if (this.demo || !id) {
-                this.store.kb = (this.store.kb || []).filter(f => f.fileName !== name);
-                this.persist();
-                this.toast('已删除（演示）', 'success');
-                await this.loadKnowledge();
-                return;
-            }
-            const res = await fetch(this.apiBaseUrl + '/knowledge/' + id, { method: 'DELETE' });
-            const txt = await res.text();
-            let data = null; try { data = JSON.parse(txt); } catch (_) { data = { raw: txt }; }
-            if (res.status >= 400) throw new Error('HTTP ' + res.status + (data && data.message ? ' ' + data.message : ''));
-            if (data && data.code === 500) throw new Error(data.message || '删除失败');
-            this.toast('已删除「' + name + '」', 'success');
-            await this.loadKnowledge();
-        } catch (e) { this.toast('删除失败：' + (e.message || e), 'error'); }
     }
     fileEmoji(n) { const e = n.toLowerCase().split('.').pop(); return { pdf: '📕', doc: '📘', docx: '📘', ppt: '📙', pptx: '📙', xls: '📗', xlsx: '📗', md: '📝', markdown: '📝', txt: '📄' }[e] || '📄'; }
     fmtSize(b) { if (!b) return ''; const k = 1024, s = ['B', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(b) / Math.log(k)); return (b / Math.pow(k, i)).toFixed(1) + s[i]; }
@@ -988,47 +976,19 @@ class StudyBuddyApp {
         const done = tasks.filter(t => t.status === 'DONE').length;
         const total = tasks.length || 1;
         const pct = Math.round(done / total * 100);
-        const groups = this.groupTasksByDay(tasks);
-        const daysHtml = groups.map(g => {
-            const gTasks = g.tasks || [];
-            const gDone = gTasks.filter(t => t.status === 'DONE').length;
-            const gTotal = gTasks.length;
-            const allDone = gTotal > 0 && gDone === gTotal;
-            const phaseChip = g.phase ? `<span class="phase-chip">${this.escapeHtml(g.phase)}</span>` : '';
-            const dayLabel = g.day != null ? `Day ${g.day}` : '未排期';
-            const dateStr = g.scheduledDate ? this.fmtDay(g.scheduledDate) : '';
-            const ratio = gTotal ? `<span class="day-ratio ${allDone ? 'all-done' : ''}">${gDone}/${gTotal} 完成</span>` : '';
-            const rows = gTasks.map(t => `
-                <div class="day-task ${t.status === 'DONE' ? 'done' : ''} ${t.status === 'DOING' ? 'doing' : ''}">
-                    <div class="day-task-main">
-                        <div class="day-task-title">
-                            <span class="day-dot"></span>
-                            <span>${this.escapeHtml(t.title)}</span>
-                        </div>
-                        <div class="day-task-tags">
-                            ${t.chapter ? `<span class="chapter-tag">📖 ${this.escapeHtml(t.chapter)}</span>` : ''}
-                            ${this.taskTime(t) ? `<span class="chapter-tag hour">⏱ ${this.escapeHtml(this.taskTime(t))}</span>` : ''}
-                        </div>
-                        ${t.description ? `<div class="day-task-desc">${this.escapeHtml(t.description)}</div>` : ''}
-                        ${t.completionNote ? `<div class="day-task-note">✍️ ${this.escapeHtml(t.completionNote)}</div>` : ''}
-                        <div class="tl-actions">
-                            <button class="mini ${t.status === 'DONE' ? '' : 'primary'}" data-act="DONE" data-p="${p.id}" data-t="${t.id}">完成</button>
-                            <button class="mini" data-act="DOING" data-p="${p.id}" data-t="${t.id}">进行中</button>
-                            <button class="mini" data-act="TODO" data-p="${p.id}" data-t="${t.id}">重置</button>
-                        </div>
+        const tl = tasks.map(t => `
+            <div class="tl-item ${t.status === 'DONE' ? 'done' : ''} ${t.status === 'DOING' ? 'doing' : ''}">
+                <div class="tl-dot"></div>
+                <div class="tl-body">
+                    <div class="tl-title">${this.escapeHtml(t.title)}</div>
+                    <div class="tl-sub">${this.escapeHtml(this.taskTime(t))} ${t.scheduledDate ? '· 截止 ' + this.escapeHtml(t.scheduledDate) : ''}</div>
+                    <div class="tl-actions">
+                        <button class="mini ${t.status === 'DONE' ? '' : 'primary'}" data-act="DONE" data-p="${p.id}" data-t="${t.id}">完成</button>
+                        <button class="mini" data-act="DOING" data-p="${p.id}" data-t="${t.id}">进行中</button>
+                        <button class="mini" data-act="TODO" data-p="${p.id}" data-t="${t.id}">重置</button>
                     </div>
-                </div>`).join('');
-            return `
-            <div class="plan-day ${allDone ? 'complete' : ''}">
-                <div class="plan-day-head">
-                    <span class="day-name">${dayLabel}</span>
-                    ${dateStr ? `<span class="day-date">${dateStr}</span>` : ''}
-                    ${phaseChip}
-                    ${ratio ? `<span class="day-ratio-wrap">${ratio}</span>` : ''}
                 </div>
-                <div class="plan-day-body">${rows || '<div class="empty small">暂无任务</div>'}</div>
-            </div>`;
-        }).join('');
+            </div>`).join('');
         return `
         <div class="plan-card glass-card" data-plan="${p.id}">
             <div class="plan-head">
@@ -1046,10 +1006,9 @@ class StudyBuddyApp {
                 <div class="plan-progress"><div class="ring" style="--p:${pct}"><span>${pct}%</span></div></div>
             </div>
             <div class="plan-bar"><div class="plan-bar-fill" style="width:${pct}%"></div></div>
-            <div class="plan-days">${daysHtml || '<div class="empty small">暂无任务</div>'}</div>
+            <div class="timeline">${tl || '<div class="empty small">暂无任务</div>'}</div>
             <div class="plan-foot">
                 <button class="mini" data-replan="${p.id}">✨ 教练重排</button>
-                <button class="mini" data-checkin2="${p.id}">📅 打卡</button>
                 <button class="mini" data-dash="${p.id}">📊 看板</button>
                 <button class="mini" data-weak="${p.id}">🔥 薄弱点</button>
                 <button class="mini danger" data-delplan="${p.id}">删除</button>
@@ -1062,32 +1021,6 @@ class StudyBuddyApp {
         if (h == null || isNaN(h)) return '';
         return '约 ' + h + ' 小时';
     }
-    groupTasksByDay(tasks) {
-        const map = new Map();
-        const unscheduled = [];
-        for (const t of tasks) {
-            if (t.day == null) { unscheduled.push(t); continue; }
-            if (!map.has(t.day)) map.set(t.day, { day: t.day, scheduledDate: t.scheduledDate, phase: t.phase, tasks: [] });
-            map.get(t.day).tasks.push(t);
-        }
-        const days = Array.from(map.values()).sort((a, b) => a.day - b.day);
-        if (unscheduled.length) days.push({ day: null, scheduledDate: null, phase: null, tasks: unscheduled });
-        return days;
-    }
-    fmtDay(dateStr) {
-        if (dateStr == null || dateStr === '') return '';
-        let M, d;
-        if (Array.isArray(dateStr)) {
-            // JDBC 驱动把 LocalDate 序列化成 [yyyy, MM, dd, ...] 数组
-            [, M, d] = dateStr;
-        } else {
-            const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
-            if (!m) return String(dateStr);
-            M = m[2]; d = m[3];
-        }
-        if (M == null || d == null) return String(dateStr);
-        return Number(M) + '月' + Number(d) + '日';
-    }
     bindPlanCards() {
         document.querySelectorAll('.plan-card').forEach(card => {
             const pid = card.dataset.plan;
@@ -1095,7 +1028,6 @@ class StudyBuddyApp {
                 await this.api(`/plans/${pid}/tasks/${b.dataset.t}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: b.dataset.act }) });
                 await this.renderPlans();
             }));
-            const checkin = card.querySelector('[data-checkin2]'); if (checkin) checkin.addEventListener('click', () => this.openCheckinModal(pid));
             const replan = card.querySelector('[data-replan]'); if (replan) replan.addEventListener('click', () => this.replan(pid));
             const dash = card.querySelector('[data-dash]'); if (dash) dash.addEventListener('click', () => this.dashboard(pid, card));
             const weak = card.querySelector('[data-weak]'); if (weak) weak.addEventListener('click', () => this.weakness(pid, card));
@@ -1128,25 +1060,10 @@ class StudyBuddyApp {
         const hoursPerDay = Number(document.getElementById('cpHoursPerDay').value) || 2;
         const priority = Number(document.getElementById('cpPriority').value) || 3;
         const notes = document.getElementById('cpNotes').value.trim();
-        const aiOn = document.getElementById('cpAiTasks') && document.getElementById('cpAiTasks').checked;
         if (!title) { this.toast('请填写标题', 'warning'); return; }
-        if (aiOn) {
-            // AI 按天拆任务：把表单信息交给 /plans/ai-detailed，AI 完善并落库
-            this.showOverlay(true, 'AI 规划中…', 'AI 正在按你填写的信息拆解每日任务，约需 30~60 秒');
-            try {
-                const data = await this.apiJson('/plans/ai-detailed', { title, subject, examDate, totalDays, hoursPerDay, priority, notes, topics: notes });
-                const tasks = (data && data.tasks) || [];
-                this.toast('已生成 ' + tasks.length + ' 条任务，覆盖 ' + totalDays + ' 天', 'success', 6000);
-                this.closeCreatePlanModal();
-                await this.renderPlans();
-                await this.loadQuizPlans();
-            } catch (e) { this.toast('规划失败：' + this.escapeHtml(e.message), 'error'); }
-            finally { this.showOverlay(false); }
-            return;
-        }
         try {
             await this.apiJson('/plans', { title, subject, examDate, totalDays, hoursPerDay, priority, notes, goalText: title });
-            this.toast('计划已创建（空计划，可手动加任务）', 'success');
+            this.toast('计划已创建', 'success');
             this.closeCreatePlanModal();
             await this.renderPlans();
             await this.loadQuizPlans();
@@ -1198,85 +1115,24 @@ class StudyBuddyApp {
         catch (e) { this.toast('失败：' + e.message, 'error'); }
         finally { this.showOverlay(false); }
     }
-    todayStr() {
-        const d = new Date();
-        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    }
-    normDate(v) {
-        if (v == null) return null;
-        if (Array.isArray(v) && v.length >= 3) {
-            return String(v[0]).padStart(4, '0') + '-' + String(v[1]).padStart(2, '0') + '-' + String(v[2]).padStart(2, '0');
-        }
-        return String(v).slice(0, 10);
-    }
-    async openCheckinModal(pid) {
-        const m = document.getElementById('checkinModal');
-        if (!m) return;
-        this._ciPid = pid;
-        document.getElementById('ciText').value = '';
-        document.getElementById('ciMinutes').value = '60';
-        document.getElementById('ciMood').value = '😀';
-        const wrap = document.getElementById('ciTasks');
-        wrap.innerHTML = '<div class="empty small">加载今日任务…</div>';
-        m.hidden = false;
-        const today = this.todayStr();
-        try {
-            const d = await this.api('/plans/' + pid, {});
-            document.getElementById('ciPlanName').textContent = (d && d.plan && d.plan.title) ? d.plan.title : '';
-            const tasks = (d && d.tasks) || [];
-            const isToday = t => t.scheduledDate && this.normDate(t.scheduledDate) === today;
-            let todayTasks = tasks.filter(t => isToday(t) && t.status !== 'DONE');
-            if (!todayTasks.length) {
-                // 今日无排期任务：回退到最近未完成任务（最多 5 条）
-                todayTasks = tasks.filter(t => t.status !== 'DONE').slice(0, 5);
-            }
-            wrap.innerHTML = todayTasks.length
-                ? todayTasks.map(t => `
-                    <label class="ci-task">
-                        <input type="checkbox" class="ci-check" value="${t.id}" checked />
-                        <span class="ci-task-name">${this.escapeHtml(t.title)}</span>
-                        <span class="ci-task-day">${t.scheduledDate ? this.fmtDay(t.scheduledDate) : ''}</span>
-                    </label>`).join('')
-                : '<div class="empty small">今天没有待办任务，可以直接记录学习内容 👍</div>';
-        } catch (e) { wrap.innerHTML = '<div class="empty small err">加载失败：' + this.escapeHtml(e.message) + '</div>'; }
-    }
-    closeCheckinModal() { document.getElementById('checkinModal').hidden = true; this._ciPid = null; }
-    async submitCheckin() {
-        const pid = this._ciPid;
-        if (!pid) { this.closeCheckinModal(); return; }
-        const checks = [...document.querySelectorAll('#ciTasks .ci-check:checked')];
-        const note = document.getElementById('ciText').value.trim();
-        const minutes = Number(document.getElementById('ciMinutes').value) || 0;
-        const mood = document.getElementById('ciMood').value;
-        if (!checks.length && !note) { this.toast('请勾选完成的任务或填写学习内容', 'warning'); return; }
-        try {
-            // 1. 勾选的任务置为 DONE，并把「做了什么」写入 completion_note（后端自动带时间戳）
-            for (const c of checks) {
-                await this.api('/plans/' + pid + '/tasks/' + c.value, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'DONE', note }) });
-            }
-            // 2. 写入打卡记录
-            await this.apiJson('/plans/' + pid + '/checkin', { date: this.todayStr(), doneTaskIdList: checks.map(c => c.value), completedContent: note, durationMinutes: minutes, mood: mood });
-            this.toast('打卡成功 💪', 'success');
-            this.closeCheckinModal();
-            await this.renderPlans();
-        } catch (e) { this.toast('打卡失败：' + this.escapeHtml(e.message), 'error'); }
+    async checkin(pid) {
+        const note = prompt('今天完成了什么？', '') || '';
+        const minutes = prompt('学习时长(分钟)：', '60') || '60';
+        try { await this.apiJson('/plans/' + pid + '/checkin', { completedContent: note, durationMinutes: Number(minutes), mood: null }); this.toast('打卡成功 💪', 'success'); }
+        catch (e) { this.toast('失败：' + e.message, 'error'); }
     }
     async dashboard(pid, card) {
         const extra = card.querySelector('#extra-' + pid);
         try {
             const d = await this.api('/plans/' + pid + '/dashboard', {});
-            // 自动重排提示：系统观察执行状态发现停滞，已自动重排剩余任务
-            const autoNote = (d.autoReplanned && d.coachNote)
-                ? `<div class="auto-replan-note">🤖 ${this.escapeHtml(d.coachNote)}</div>` : '';
-            extra.innerHTML = `<div class="extra-card"><h4>进度看板</h4>${autoNote}
+            extra.innerHTML = `<div class="extra-card"><h4>进度看板</h4>
                 <div class="kv"><span>完成率</span><b>${d.completionRate ?? 0}%</b></div>
                 <div class="kv"><span>已完成/总任务</span><b>${(d.doneTasks ?? 0)}/${(d.totalTasks ?? 0)}</b></div>
                 <div class="kv"><span>连续打卡</span><b>${d.streak ?? 0} 天</b></div>
                 <div class="status-dist">${(d.statusDistribution || []).map(s => `<span class="badge">${this.escapeHtml(s.status)}: ${s.count}</span>`).join('')}</div>
                 <button class="mini primary" data-checkin="${pid}">今日打卡</button>
             </div>`;
-            if (d.autoReplanned) this.toast('检测到停滞，已自动重排剩余任务', 'info');
-            extra.querySelector('[data-checkin]').addEventListener('click', () => this.openCheckinModal(pid));
+            extra.querySelector('[data-checkin]').addEventListener('click', () => this.checkin(pid));
         } catch (e) { extra.innerHTML = '<div class="extra-card err">' + this.escapeHtml(e.message) + '</div>'; }
     }
     async weakness(pid, card) {

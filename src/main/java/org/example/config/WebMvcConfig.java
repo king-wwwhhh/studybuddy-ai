@@ -36,10 +36,24 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .maxAge(3600);
     }
 
+    /**
+     * 静态资源分流：
+     *   /legacy/**      → 旧版单页（用户端主界面，含 canvas 粒子/极光动效）
+     *   其余（含 /）    → Vue 应用（登录页 + 管理员后台）
+     * 开发时优先读源码目录，便于 npm run build 后刷新即生效。
+     */
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        registry.addResourceHandler("/legacy/**")
+                .addResourceLocations(
+                        "file:src/main/resources/static-legacy/",
+                        "classpath:/static-legacy/")
+                .setCachePeriod(0);
         // 配置静态资源映射
         registry.addResourceHandler("/**")
-                .addResourceLocations("classpath:/static/");
+                .addResourceLocations(
+                        "file:src/main/resources/static/",
+                        "classpath:/static/")
+                .setCachePeriod(0);
     }
 }
