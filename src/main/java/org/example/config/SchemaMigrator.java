@@ -34,7 +34,16 @@ public class SchemaMigrator implements CommandLineRunner {
             new String[] { "study_plan", "goal_text", "TEXT" },
             new String[] { "study_plan", "last_replan_at", "TEXT" },
             new String[] { "study_plan", "auto_replan_count", "INTEGER DEFAULT 0" },
-            new String[] { "plan_task", "chapter", "TEXT" }
+            new String[] { "plan_task", "chapter", "TEXT" },
+            // ===== 多用户隔离（R1）：8 张业务表统一加 user_id，旧行归 0（SYSTEM）=====
+            new String[] { "study_plan", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "plan_task", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "daily_checkin", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "weak_area", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "plan_chapter", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "chat_session", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "knowledge_files", "user_id", "INTEGER DEFAULT 0" },
+            new String[] { "learner_profile", "user_id", "INTEGER DEFAULT 0" }
     );
 
     @Override
@@ -50,6 +59,7 @@ public class SchemaMigrator implements CommandLineRunner {
                 // 库/元数据表不存在，跳过迁移
                 return;
             }
+            ensureIndexes(tables);
             for (String[] m : migrations) {
                 String table = m[0], column = m[1], def = m[2];
                 if (!tables.contains(table)) continue;
@@ -67,5 +77,33 @@ public class SchemaMigrator implements CommandLineRunner {
         } catch (Exception e) {
             logger.warn("SchemaMigrator 跳过：{}", e.getMessage());
         }
+    }
+
+    /**
+     * 用户维度索引（幂等）：多用户隔离后，几乎所有查询都会带 user_id 条件。
+     * 用 IF NOT EXISTS 保证可重复执行。
+     */
+    private void ensureIndexes(List<String> tables) {
+        String[][] indexes = {
+                // 表名, 索引名, 列定义
+                { "study_plan", "idx_study_plan_user", "user_id" },
+                { "plan_task", "idx_plan_task_user", "user_id" },
+                { "daily_checkin", "idx_daily_checkin_user", "user_id" },
+                { "weak_area", "idx_weak_area_user", "user_id" },
+                { "plan_chapter", "idx_plan_chapter_user", "user_id" },
+                { "chat_session", "idx_chat_session_user", "user_id" },
+                { "chat_message", "idx_chat_message_session", "session_id" },
+                { "knowledge_files", "idx_knowledge_files_user", "user_id" },
+                { "learner_profile", "idx_learner_profile_user", "user_id" }
+        };
+        for (String[] ix : indexes) {
+            if (!tables.contains(ix[0])) continue;
+            try {
+                jdbc.execute("CREATE INDEX IF NOT EXISTS " + ix[1] + " ON " + ix[0] + "(" + ix[2] + ")");
+            } catch (DataAccessException ex) {
+                logger.warn("创建索引失败 {}({}): {}", ix[1], ix[2], ex.getMessage());
+            }
+        }
+        logger.info("用户维度索引检查完成");
     }
 }
