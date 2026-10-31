@@ -20,16 +20,32 @@
         </div>
       </div>
 
+      <div class="glass panel" style="margin-bottom:16px">
+        <div class="panel-head"><span>系统设置</span></div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-name">开放新用户注册</div>
+            <div class="setting-desc">关闭后任何人都无法通过注册页创建账号（已有账号不受影响）</div>
+          </div>
+          <el-switch v-model="registrationOpen" :loading="savingSetting" @change="toggleRegistration" />
+        </div>
+      </div>
+
       <div class="glass panel">
         <div class="panel-head">
           <span>账号列表</span>
-          <button class="btn-grad" @click="loadAll">刷新</button>
+          <div>
+            <button class="btn-grad" @click="openCreate">+ 新增用户</button>
+            <button class="link-btn" style="margin-left:14px" @click="loadAll">刷新</button>
+          </div>
         </div>
         <el-empty v-if="!users.length" description="暂无用户" />
         <el-table v-else :data="users" style="width: 100%">
           <el-table-column prop="id" label="ID" width="70" />
           <el-table-column prop="email" label="邮箱" min-width="200" />
-          <el-table-column prop="nickname" label="昵称" width="150" />
+          <el-table-column label="用户名" width="150">
+            <template #default="{ row }">{{ row.username || row.nickname || '—' }}</template>
+          </el-table-column>
           <el-table-column label="角色" width="110">
             <template #default="{ row }">
               <span :class="['pill', row.role === 'ADMIN' ? 'pill-admin' : 'pill-user']">{{ row.role }}</span>
@@ -45,22 +61,63 @@
           <el-table-column prop="lastLoginAt" label="最近登录" width="180">
             <template #default="{ row }">{{ short(row.lastLoginAt) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="180">
+          <el-table-column label="操作" width="290">
             <template #default="{ row }">
               <button class="link-btn" @click="toggleStatus(row)">
                 {{ row.status === 'ACTIVE' ? '禁用' : '启用' }}
               </button>
+              <button class="link-btn" @click="openEdit(row)">编辑</button>
+              <button class="link-btn" @click="openReset(row)">重置密码</button>
               <button v-if="row.role !== 'ADMIN'" class="link-btn warn" @click="promote(row)">设为管理员</button>
+              <button class="link-btn danger" @click="removeUser(row)">删除</button>
             </template>
           </el-table-column>
         </el-table>
       </div>
+      <!-- 新增/编辑用户 -->
+      <el-dialog v-model="dialog" :title="editing ? '编辑用户' : '新增用户'" width="440px">
+        <el-form label-width="80px">
+          <el-form-item label="邮箱">
+            <el-input v-model="form.email" :disabled="editing" placeholder="user@qq.com" />
+          </el-form-item>
+          <el-form-item v-if="!editing" label="密码">
+            <el-input v-model="form.password" type="password" show-password placeholder="至少 8 位" />
+          </el-form-item>
+          <el-form-item label="用户名">
+            <el-input v-model="form.username" placeholder="4-20 位字母/数字/下划线/中文" />
+            <div class="field-hint">唯一不可重复；不能用 admin 等保留名或违规词</div>
+          </el-form-item>
+          <el-form-item label="角色">
+            <el-select v-model="form.role" style="width:100%">
+              <el-option label="普通用户" value="USER" />
+              <el-option label="管理员" value="ADMIN" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <button class="link-btn" @click="dialog = false">取消</button>
+          <button class="btn-grad" style="margin-left:12px" :disabled="saving" @click="save">保存</button>
+        </template>
+      </el-dialog>
+
+      <!-- 重置密码 -->
+      <el-dialog v-model="resetDialog" title="重置密码" width="400px">
+        <el-form label-width="80px">
+          <el-form-item label="新密码">
+            <el-input v-model="resetPwd" type="password" show-password placeholder="至少 8 位" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <button class="link-btn" @click="resetDialog = false">取消</button>
+          <button class="btn-grad" style="margin-left:12px" :disabled="saving" @click="doReset">确定</button>
+        </template>
+      </el-dialog>
     </div>
   </AppLayout>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import http from '../api/http'
@@ -119,7 +176,105 @@ async function promote(row) {
   } catch (e) { ElMessage.error('操作失败') }
 }
 
-onMounted(loadAll)
+
+// ==================== 系统设置 ====================
+const registrationOpen = ref(true)
+const savingSetting = ref(false)
+
+async function loadSettings() {
+  try {
+    const { data } = await http.get('/admin/settings')
+    registrationOpen.value = data.data?.registrationOpen !== false
+  } catch (e) { /* 忽略 */ }
+}
+
+async function toggleRegistration(val) {
+  savingSetting.value = true
+  try {
+    await http.post('/admin/settings', { registrationOpen: val })
+    ElMessage.success(val ? '已开放注册' : '已暂停注册')
+  } catch (e) {
+    ElMessage.error('设置失败')
+    registrationOpen.value = !val
+  } finally { savingSetting.value = false }
+}
+
+// ==================== 用户增删改 ====================
+const dialog = ref(false)
+const editing = ref(false)
+const saving = ref(false)
+const form = reactive({ id: null, email: '', password: '', username: '', role: 'USER' })
+
+const resetDialog = ref(false)
+const resetPwd = ref('')
+const resetTarget = ref(null)
+
+function openCreate() {
+  editing.value = false
+  Object.assign(form, { id: null, email: '', password: '', username: '', role: 'USER' })
+  dialog.value = true
+}
+
+function openEdit(row) {
+  editing.value = true
+  Object.assign(form, { id: row.id, email: row.email, password: '', username: row.username || row.nickname || '', role: row.role })
+  dialog.value = true
+}
+
+async function save() {
+  if (!editing.value && (!form.email.includes('@') || form.password.length < 8)) {
+    return ElMessage.warning('请填写有效邮箱，密码至少 8 位')
+  }
+  if (!form.username || form.username.trim().length < 4) {
+    return ElMessage.warning('用户名至少 4 位')
+  }
+  saving.value = true
+  try {
+    if (editing.value) {
+      await http.post('/admin/users/' + form.id, { username: form.username, role: form.role })
+      ElMessage.success('已保存')
+    } else {
+      const { data } = await http.post('/admin/users', form)
+      if (!data.success) { ElMessage.error(data.message || '创建失败'); return }
+      ElMessage.success('已创建')
+    }
+    dialog.value = false
+    await loadAll()
+  } catch (e) { ElMessage.error('保存失败') } finally { saving.value = false }
+}
+
+function openReset(row) {
+  resetTarget.value = row
+  resetPwd.value = ''
+  resetDialog.value = true
+}
+
+async function doReset() {
+  if (resetPwd.value.length < 8) return ElMessage.warning('密码至少 8 位')
+  saving.value = true
+  try {
+    const { data } = await http.post('/admin/users/' + resetTarget.value.id + '/password', { password: resetPwd.value })
+    if (!data.success) { ElMessage.error(data.message || '重置失败'); return }
+    ElMessage.success('密码已重置')
+    resetDialog.value = false
+  } catch (e) { ElMessage.error('重置失败') } finally { saving.value = false }
+}
+
+async function removeUser(row) {
+  try {
+    await ElMessageBox.confirm(
+      `删除后该账号及其知识库、对话、计划都会被清除，且无法恢复。确定删除 ${row.email} ？`,
+      '删除用户', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch (e) { return }
+  try {
+    const { data } = await http.delete('/admin/users/' + row.id)
+    if (!data.success) { ElMessage.error(data.message || '删除失败'); return }
+    ElMessage.success('已删除')
+    await loadAll()
+  } catch (e) { ElMessage.error('删除失败') }
+}
+
+onMounted(() => { loadAll(); loadSettings() })
 </script>
 
 <style scoped>
@@ -144,4 +299,11 @@ onMounted(loadAll)
 }
 .link-btn:hover { text-decoration: underline; }
 .link-btn.warn { color: var(--warn); }
+
+.setting-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px 16px; gap: 20px; }
+.setting-name { font-weight: 600; margin-bottom: 4px; }
+.setting-desc { font-size: 12.5px; color: var(--muted); }
+.link-btn.danger { color: var(--err); }
+.panel-head > div { display: flex; align-items: center; }
+.field-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
 </style>

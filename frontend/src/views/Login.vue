@@ -7,7 +7,7 @@
       <el-tabs v-model="tab" stretch>
         <el-tab-pane label="登录" name="login">
           <el-form label-position="top" @submit.prevent>
-            <el-form-item label="邮箱"><el-input v-model="loginForm.email" placeholder="you@qq.com" /></el-form-item>
+            <el-form-item label="邮箱或用户名"><el-input v-model="loginForm.email" placeholder="you@qq.com 或 用户名" /></el-form-item>
             <el-form-item label="密码"><el-input v-model="loginForm.password" type="password" show-password placeholder="至少 8 位，含字母和数字" /></el-form-item>
             <button class="btn-grad block" :disabled="loading" @click="doLogin">登 录</button>
             <button class="link-row" @click="tab = 'code'">用邮箱验证码登录</button>
@@ -43,7 +43,10 @@
             <el-form-item label="密码（可选，不填则只能用验证码登录）">
               <el-input v-model="regForm.password" type="password" show-password placeholder="至少 8 位，含字母和数字" />
             </el-form-item>
-            <el-form-item label="昵称（可选）"><el-input v-model="regForm.nickname" placeholder="怎么称呼你" /></el-form-item>
+            <el-form-item label="用户名（唯一，不可重复）">
+              <el-input v-model="regForm.username" placeholder="4-20 位字母/数字/下划线/中文" />
+              <div class="field-hint">登录时可用邮箱或用户名</div>
+            </el-form-item>
             <button class="btn-grad block" :disabled="loading" @click="doRegister">注册并登录</button>
             <p class="hint">注册后可正常使用全部学习功能；管理员权限需由管理员在后台授予</p>
           </el-form>
@@ -71,7 +74,7 @@ let timer = null
 
 const loginForm = reactive({ email: '', password: '' })
 const codeForm = reactive({ email: '', code: '' })
-const regForm = reactive({ email: '', code: '', password: '', nickname: '' })
+const regForm = reactive({ email: '', code: '', password: '', username: '' })
 
 onUnmounted(() => timer && clearInterval(timer))
 
@@ -122,7 +125,10 @@ async function doCodeLogin() {
 async function doRegister() {
   loading.value = true
   try {
-    const { data } = await http.post('/auth/register', regForm)
+    if (!regForm.username || regForm.username.trim().length < 4) {
+      return ElMessage.warning('用户名至少 4 位')
+    }
+    const { data } = await http.post('/auth/register', { ...regForm, nickname: regForm.username })
     data.success ? afterLogin(data.data) : ElMessage.error(data.message)
   } catch (e) { ElMessage.error(e.response?.data?.message || '注册失败') } finally { loading.value = false }
 }
@@ -145,4 +151,5 @@ async function doRegister() {
 .link-row { display: block; width: 100%; margin-top: 14px; background: none; border: none;
   color: var(--primary2); cursor: pointer; font-size: 13px; }
 .hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; text-align: center; }
+.field-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
 </style>
