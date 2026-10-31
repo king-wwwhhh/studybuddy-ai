@@ -236,14 +236,7 @@ public class ChatController {
                     error -> {
                         // 错误处理
                         logger.error("ReactAgent 流式对话失败", error);
-                        try {
-                            emitter.send(SseEmitter.event()
-                                    .name("message")
-                                    .data(SseMessage.error(error.getMessage()), MediaType.APPLICATION_JSON));
-                        } catch (IOException ex) {
-                            logger.error("发送错误消息失败", ex);
-                        }
-                        emitter.completeWithError(error);
+                        sendErrorAndComplete(emitter, friendlyMessage(error));
                     },
                     () -> {
                         // 完成处理
@@ -265,23 +258,19 @@ public class ChatController {
                                     .name("message")
                                     .data(SseMessage.done(agentType), MediaType.APPLICATION_JSON));
                             emitter.complete();
-                        } catch (IOException e) {
-                            logger.error("发送完成消息失败", e);
-                            emitter.completeWithError(e);
+                        } catch (Exception e) {
+                            logger.error("发送完成消息失败（已尝试收尾）", e);
+                            sendErrorAndComplete(emitter, "回答已生成，但写回完成标记失败");
                         }
                     }
                 );
 
             } catch (Exception e) {
                 logger.error("ReactAgent 对话初始化失败", e);
-                try {
-                    emitter.send(SseEmitter.event()
-                            .name("message")
-                            .data(SseMessage.error(e.getMessage()), MediaType.APPLICATION_JSON));
-                } catch (IOException ex) {
-                    logger.error("发送错误消息失败", ex);
-                }
-                emitter.completeWithError(e);
+                // 关键：初始化失败（如模型未配置/鉴权失败/网络不通）时，必须给前端一条**可读**的错误事件，
+                // 并且用 complete() 正常收尾。原来的 completeWithError() 会让浏览器只看到
+                // ERR_INCOMPLETE_CHUNKED_ENCODING，拿不到任何原因。
+                sendErrorAndComplete(emitter, friendlyMessage(e));
             }
         });
 
@@ -337,6 +326,45 @@ public class ChatController {
     }
 
     private static String trim(String s) { return s == null ? "" : s.trim(); }
+
+    /**
+     * 把异常翻译成用户能看懂的提示（不暴露堆栈与内部地址）。
+     * 论文「容错设计」可直接引用：错误必须让调用方看到，且要分级给出可操作建议。
+     */
+    private static String friendlyMessage(Throwable e) {
+        String msg = e == null ? "" : String.valueOf(e.getMessage());
+        String all = msg + " " + (e != null && e.getCause() != null ? e.getCause().getClass().getName() : "");
+        if (all.contains("401") || all.contains("Unauthorized") || all.contains("api-key") || all.contains("API Key")) {
+            return "大模型鉴权失败：请检查服务端是否配置了有效的 DASHSCOPE_API_KEY";
+        }
+        if (all.contains("DASHSCOPE_API_KEY 未正确配置")) {
+            return "大模型未配置：请设置 DASHSCOPE_API_KEY 后重启服务";
+        }
+        if (all.contains("Timeout") || all.contains("timeout") || all.contains("timed out")) {
+            return "大模型响应超时，请稍后重试";
+        }
+        if (all.contains("UnknownHost") || all.contains("Connection refused") || all.contains("Connect")) {
+            return "无法连接大模型服务，请检查网络或服务地址";
+        }
+        return msg.isBlank() ? "回答失败，请稍后重试" : ("回答失败：" + msg);
+    }
+
+    /** 统一的 SSE 收尾：先发 error 事件，再 complete()。绝不 completeWithError（前端拿不到原因） */
+    private static void sendErrorAndComplete(SseEmitter emitter, String message) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("message")
+                    .data(SseMessage.error(message), MediaType.APPLICATION_JSON));
+        } catch (Exception ex) {
+            logger.debug("发送错误事件失败（连接可能已断）: {}", ex.getMessage());
+        } finally {
+            try {
+                emitter.complete();
+            } catch (Exception ignored) {
+                // 已关闭
+            }
+        }
+    }
 
     private SessionInfo getOrCreateSession(String sessionId) {
         if (sessionId == null || sessionId.isEmpty()) {

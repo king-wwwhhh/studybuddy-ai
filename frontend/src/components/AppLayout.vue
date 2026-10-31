@@ -4,6 +4,7 @@
       <div class="logo">StudyBuddy</div>
       <el-menu :default-active="$route.path" router class="menu">
         <el-menu-item index="/dashboard">学习看板</el-menu-item>
+        <el-menu-item index="/chat">AI 对话</el-menu-item>
         <el-menu-item index="/plans">学习计划</el-menu-item>
         <el-menu-item index="/knowledge">知识库</el-menu-item>
         <el-menu-item v-if="auth.isAdmin" index="/admin">管理后台</el-menu-item>
