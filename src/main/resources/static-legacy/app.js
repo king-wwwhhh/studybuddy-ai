@@ -1372,7 +1372,19 @@ class StudyBuddyApp {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => { window.__app = new StudyBuddyApp(); });
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.__app = new StudyBuddyApp();
+    // 首屏显式激活对话视图：.view 默认 display:none，
+    // 不激活会导致 chat 区（含模型胶囊、输入框）整块不可见。
+    try {
+        window.__app.switchView('chat');
+        window.__app.updateModelPill();
+        if (typeof window.__app.renderModelMenu === 'function') window.__app.renderModelMenu();
+    } catch (e) {
+        console.warn('[legacy] 首屏初始化异常:', e.message);
+    }
+});
 
 /* ============ 视觉特效：全屏粒子辉光 + 液态悬停 + 点击水波 ============ */
 (function () {
