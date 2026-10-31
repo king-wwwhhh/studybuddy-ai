@@ -2,6 +2,7 @@ package org.example.controller;
 
 import org.example.entity.KnowledgeFile;
 import org.example.service.FileIngestService;
+import org.example.auth.OwnerSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,6 +83,7 @@ public class KnowledgeController {
         try {
             List<KnowledgeFile> rows = jdbc.query(
                     "SELECT id,file_name,repo,repo_path,file_sha,chunks,size_bytes,status,created_at,updated_at " +
+                            "FROM knowledge_files WHERE " + OwnerSupport.visibleScope("user_id") + " " +
                             "FROM knowledge_files ORDER BY updated_at DESC", ROW_MAPPER);
             return ResponseEntity.ok(ApiResponse.success(rows));
         } catch (Exception e) {

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.config.ChatModelFactory;
 import org.example.entity.ChatMessage;
 import org.example.entity.ChatSession;
+import org.example.auth.OwnerSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,8 +49,9 @@ public class MemoryService {
 
     public void ensureSession(String id, String agentName, String title) {
         String now = LocalDateTime.now().toString();
-        jdbc.update("INSERT OR IGNORE INTO chat_session(id,agent_name,title,created_at,updated_at) VALUES(?,?,?,?,?)",
-                id, agentName, title != null ? title : "会话", now, now);
+        // 归属：会话创建时绑定当前用户（R4）
+        jdbc.update("INSERT OR IGNORE INTO chat_session(id,agent_name,title,created_at,updated_at,user_id) VALUES(?,?,?,?,?,?)",
+                id, agentName, title != null ? title : "会话", now, now, OwnerSupport.currentUserId());
     }
 
     public void saveMessage(String sessionId, String role, String content) {
@@ -75,6 +77,16 @@ public class MemoryService {
         }).toList();
     }
 
+    /** 会话是否属于当前用户（读历史/召回/摘要前统一守卫，R4） */
+    public boolean ownsSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM chat_session WHERE id=? AND "
+                + OwnerSupport.visibleScope("user_id"), Integer.class, sessionId);
+        return n != null && n > 0;
+    }
+
     /**
      * 按关键词召回当前会话的历史消息（供 `recallHistory` 工具使用）。
      *
@@ -82,8 +94,8 @@ public class MemoryService {
      * 目前是「全量载入 + 内存打分」，会话特别长时应改成 SQL 预过滤或 FTS5。</p>
      */
     public List<ChatMessage> searchMessages(String sessionId, String query, int limit) {
-        if (sessionId == null || sessionId.isBlank()) {
-            return java.util.List.of();
+        if (!ownsSession(sessionId)) {
+            return java.util.List.of(); // 非本会话：返回空，不泄露内容也不报错
         }
         return HistoryRecallMatcher.topMatches(loadHistory(sessionId), query, limit);
     }
@@ -101,7 +113,8 @@ public class MemoryService {
     /** 列出全部会话（按最近活跃时间倒序），供前端历史会话面板恢复 */
     public List<Map<String, Object>> listSessions() {
         return jdbc.query(
-                "SELECT id, agent_name, title, created_at, updated_at FROM chat_session ORDER BY updated_at DESC",
+                "SELECT id, agent_name, title, created_at, updated_at FROM chat_session WHERE "
+                        + OwnerSupport.visibleScope("user_id") + " ORDER BY updated_at DESC",
                 (rs, i) -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("id", rs.getString("id"));

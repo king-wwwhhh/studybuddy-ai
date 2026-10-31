@@ -525,8 +525,9 @@ public class FileIngestService {
 
     /** 删除知识库文件：删 Milvus 向量 + 删 SQLite 记录（GitHub 真源备份保留）。返回是否找到并删除。 */
     public boolean deleteFile(Long id) {
+        // 归属校验（R4）：只能删除当前用户可见的文件记录
         String repoPath = jdbc.query(
-                "SELECT repo_path FROM knowledge_files WHERE id=?",
+                "SELECT repo_path FROM knowledge_files WHERE id=? AND " + OwnerSupport.visibleScope("user_id"),
                 (rs, rowNum) -> rs.getString("repo_path"), id)
                 .stream().findFirst().orElse(null);
         if (repoPath == null) return false;
@@ -575,12 +576,14 @@ public class FileIngestService {
                 (rs, rowNum) -> rs.getInt("id"), repoPath)
                 .stream().findFirst().orElse(null);
         if (existing != null) {
-            jdbc.update("UPDATE knowledge_files SET file_sha=?, chunks=?, size_bytes=?, status=?, updated_at=? WHERE repo_path=?",
+            jdbc.update("UPDATE knowledge_files SET file_sha=?, chunks=?, size_bytes=?, status=?, updated_at=? "
+                            + "WHERE repo_path=? AND " + OwnerSupport.visibleScope("user_id"),
                     sha, chunks, size, status, now, repoPath);
         } else {
-            jdbc.update("INSERT INTO knowledge_files(file_name, repo, repo_path, file_sha, chunks, size_bytes, status, created_at, updated_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?)",
-                    fileName, repoUrl, repoPath, sha, chunks, size, status, now, now);
+            jdbc.update("INSERT INTO knowledge_files(file_name, repo, repo_path, file_sha, chunks, size_bytes, status, created_at, updated_at, user_id) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    fileName, repoUrl, repoPath, sha, chunks, size, status, now, now,
+                    OwnerSupport.currentUserId());
         }
     }
 

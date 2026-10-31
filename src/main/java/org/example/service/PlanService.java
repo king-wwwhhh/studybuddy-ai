@@ -5,6 +5,7 @@ import org.example.entity.StudyPlan;
 import org.example.config.ChatModelFactory;
 import org.example.entity.WeakArea;
 import org.example.util.JsonExtractor;
+import org.example.auth.OwnerSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -109,8 +110,8 @@ public class PlanService {
         KeyHolder kh = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement(
-                    "INSERT INTO study_plan(title,subject,exam_date,total_days,status,priority,hours_per_day,notes,goal_text,created_at,updated_at) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO study_plan(title,subject,exam_date,total_days,status,priority,hours_per_day,notes,goal_text,created_at,updated_at,user_id) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     new String[]{"id"});
             ps.setString(1, title);
             ps.setString(2, subject);
@@ -123,6 +124,7 @@ public class PlanService {
             ps.setString(9, goalText);
             ps.setString(10, now);
             ps.setString(11, now);
+            ps.setLong(12, OwnerSupport.currentUserId()); // 归属：当前登录用户
             return ps;
         }, kh);
         Long planId = ((Number) kh.getKey()).longValue();
@@ -177,16 +179,43 @@ public class PlanService {
         try { return Double.valueOf(String.valueOf(o).trim()); } catch (Exception e) { return null; }
     }
 
+    /** 当前用户可见的计划（本人 + 系统公共），旧数据 user_id=0 归系统，见 LegacyDataMigration */
     public List<StudyPlan> listPlans() {
-        return jdbc.query("SELECT * FROM study_plan ORDER BY created_at DESC", PLAN_ROW);
+        return jdbc.query("SELECT * FROM study_plan WHERE " + OwnerSupport.visibleScope("user_id")
+                + " ORDER BY created_at DESC", PLAN_ROW);
     }
 
+    /**
+     * 读取计划；**不属于当前用户则返回 null**（调用方按"不存在"处理 → 404），
+     * 这样既防越权，也不泄露"该 id 是否存在"。
+     */
     public StudyPlan getPlan(Long id) {
-        List<StudyPlan> r = jdbc.query("SELECT * FROM study_plan WHERE id=?", PLAN_ROW, id);
+        List<StudyPlan> r = jdbc.query("SELECT * FROM study_plan WHERE id=? AND "
+                + OwnerSupport.visibleScope("user_id"), PLAN_ROW, id);
         return r.isEmpty() ? null : r.get(0);
     }
 
+    /** 计划是否属于当前用户（子表操作前的统一守卫） */
+    public boolean ownsPlan(Long planId) {
+        if (planId == null) return false;
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM study_plan WHERE id=? AND "
+                + OwnerSupport.visibleScope("user_id"), Integer.class, planId);
+        return n != null && n > 0;
+    }
+
+    /** 任务所属计划是否归当前用户（任务状态更新前守卫） */
+    public boolean ownsTask(Long taskId) {
+        if (taskId == null) return false;
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM plan_task t JOIN study_plan p ON p.id=t.plan_id "
+                        + "WHERE t.id=? AND " + OwnerSupport.visibleScope("p.user_id"), Integer.class, taskId);
+        return n != null && n > 0;
+    }
+
     public List<PlanTask> getTasks(Long planId) {
+        if (!ownsPlan(planId)) {
+            return java.util.List.of(); // 非本人计划：返回空而不是 403，避免探测 id 是否存在
+        }
         return jdbc.query("SELECT * FROM plan_task WHERE plan_id=? ORDER BY week, day", TASK_ROW, planId);
     }
 
@@ -199,6 +228,10 @@ public class PlanService {
      * 供「每日打卡 / 任务完成详情」带时间展示。
      */
     public PlanTask updateTaskStatus(Long taskId, String status, String note) {
+        if (!ownsTask(taskId)) {
+            logger.warn("越权更新任务被拒: taskId={} userId={}", taskId, OwnerSupport.currentUserId());
+            return null;
+        }
         String actualDate = "DONE".equals(status) ? LocalDate.now().toString() : null;
         String completionNote = null;
         if ("DONE".equals(status) && note != null && !note.isBlank()) {
@@ -213,6 +246,10 @@ public class PlanService {
 
     /** 删除计划及其下任务、打卡与薄弱点记录 */
     public int deletePlan(Long id) {
+        if (!ownsPlan(id)) {
+            logger.warn("越权删除计划被拒: planId={} userId={}", id, OwnerSupport.currentUserId());
+            return 0;
+        }
         jdbc.update("DELETE FROM weak_area WHERE plan_id=?", id);
         jdbc.update("DELETE FROM daily_checkin WHERE plan_id=?", id);
         jdbc.update("DELETE FROM plan_task WHERE plan_id=?", id);
@@ -227,6 +264,9 @@ public class PlanService {
      * 带回给调用方，由前端或教练向学员解释调整。
      */
     public Map<String, Object> getDashboard(Long planId) {
+        if (!ownsPlan(planId)) {
+            return Map.of("error", "plan not found");
+        }
         Map<String, Object> dash = buildDashboard(planId);
         maybeAutoReplan(planId, dash);
         return dash;
@@ -574,6 +614,9 @@ public class PlanService {
      */
     public List<String> listChapters(Long planId) {
         java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        if (!ownsPlan(planId)) {
+            return new java.util.ArrayList<>();
+        }
         try {
             jdbc.query(
                     "SELECT DISTINCT chapter FROM plan_task WHERE plan_id=? AND chapter IS NOT NULL AND chapter<>'' ORDER BY chapter",
@@ -596,14 +639,14 @@ public class PlanService {
 
     /** 手动给计划添加一个章节名（重复则忽略），供「管理章节」UI 使用 */
     public void addChapter(Long planId, String name) {
-        if (name == null || name.isBlank()) return;
+        if (name == null || name.isBlank() || !ownsPlan(planId)) return;
         jdbc.update("INSERT OR IGNORE INTO plan_chapter(plan_id,name,created_at) VALUES(?,?,?)",
                 planId, name.trim(), LocalDateTime.now().toString());
     }
 
     /** 手动删除一个章节名，供「管理章节」UI 使用 */
     public void removeChapter(Long planId, String name) {
-        if (name == null || name.isBlank()) return;
+        if (name == null || name.isBlank() || !ownsPlan(planId)) return;
         jdbc.update("DELETE FROM plan_chapter WHERE plan_id=? AND name=?", planId, name.trim());
     }
 
@@ -623,6 +666,10 @@ public class PlanService {
     };
 
     public void upsertWeakArea(Long planId, String chapter, String reason, int severity, String suggested) {
+        if (!ownsPlan(planId)) {
+            logger.warn("越权写入薄弱点被拒: planId={} userId={}", planId, OwnerSupport.currentUserId());
+            return;
+        }
         String now = LocalDateTime.now().toString();
         List<WeakArea> existing = jdbc.query(
                 "SELECT * FROM weak_area WHERE plan_id=? AND chapter=?", WEAK_ROW, planId, chapter);
@@ -638,6 +685,9 @@ public class PlanService {
     }
 
     public List<WeakArea> getWeakAreas(Long planId) {
+        if (!ownsPlan(planId)) {
+            return new ArrayList<>();
+        }
         return jdbc.query("SELECT * FROM weak_area WHERE plan_id=? ORDER BY severity DESC", WEAK_ROW, planId);
     }
 
