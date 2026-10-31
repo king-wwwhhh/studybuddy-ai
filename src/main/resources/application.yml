@@ -188,6 +188,9 @@ auth:
     secret: ${AUTH_JWT_SECRET:}
     ttl-hours: ${AUTH_JWT_TTL_HOURS:24}
   bcrypt-cost: ${AUTH_BCRYPT_COST:10}
+  # 引导管理员：把这里指定的**已注册**邮箱提升为 ADMIN（逗号分隔可多个）
+  # 注册一律是普通用户；管理员只能通过此配置或后台「设为管理员」获得权限
+  bootstrap-admin-email: ${AUTH_BOOTSTRAP_ADMIN_EMAIL:}
   mail:
     # 未配置 SMTP 时是否把验证码打到日志（仅开发环境开启）
     dev-log-fallback: ${AUTH_MAIL_DEV_FALLBACK:true}

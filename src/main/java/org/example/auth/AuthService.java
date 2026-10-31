@@ -104,8 +104,9 @@ public class AuthService {
         String hash = (req.password() == null || req.password().isBlank())
                 ? null : encoder.encode(req.password());
 
-        // 第一个注册的用户自动成为管理员（单机部署的引导账号）
-        String role = users.countAll() == 0 ? User.ROLE_ADMIN : User.ROLE_USER;
+        // 注册一律是普通用户。管理员只能由已有管理员在后台「设为管理员」提升，
+        // 保证权限收敛（首个注册者不再自动获得最高权限）。
+        String role = User.ROLE_USER;
         long id = users.insert(email, hash, nickname, role);
         logger.info("新用户注册: id={} email={} role={}", id, email, role);
 

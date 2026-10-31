@@ -45,7 +45,7 @@
             </el-form-item>
             <el-form-item label="昵称（可选）"><el-input v-model="regForm.nickname" placeholder="怎么称呼你" /></el-form-item>
             <button class="btn-grad block" :disabled="loading" @click="doRegister">注册并登录</button>
-            <p class="hint">首个注册的账号自动成为管理员</p>
+            <p class="hint">注册后可正常使用全部学习功能；管理员权限需由管理员在后台授予</p>
           </el-form>
         </el-tab-pane>
       </el-tabs>
