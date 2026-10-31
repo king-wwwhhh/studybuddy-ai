@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -238,6 +239,53 @@ public class DocumentChunkService {
     /**
      * 对单个章节进行分片
      */
+    /**
+     * 把一个超长段落切成若干个不超过 maxSize 的窗口。
+     * 优先在句末（。！？；. ! ? ;）断开，其次在空格/逗号，最后才硬切。
+     *
+     * <p>为什么需要：简历、表格类 PDF 抽出的文本常常整篇没有一个空行，
+     * splitByParagraphs 只能得到一个 2000+ 字的"段落"，
+     * 原逻辑（只有 currentChunk 非空才切）会把它整段塞进一个分片，
+     * 导致分片粒度失效、检索精度骤降。</p>
+     */
+    private List<String> splitLongParagraph(String paragraph, int maxSize) {
+        List<String> out = new ArrayList<>();
+        int idx = 0;
+        int len = paragraph.length();
+        while (idx < len) {
+            int end = Math.min(idx + maxSize, len);
+            if (end < len) {
+                int cut = -1;
+                for (int i = end; i > idx + maxSize / 2; i--) {
+                    char c = paragraph.charAt(i - 1);
+                    if (c == '。' || c == '！' || c == '？' || c == '；'
+                            || c == '.' || c == '!' || c == '?' || c == ';') {
+                        cut = i;
+                        break;
+                    }
+                }
+                if (cut < 0) {
+                    for (int i = end; i > idx + maxSize / 2; i--) {
+                        char c = paragraph.charAt(i - 1);
+                        if (c == ' ' || c == '\n' || c == '\t' || c == '，' || c == ',') {
+                            cut = i;
+                            break;
+                        }
+                    }
+                }
+                if (cut > idx) {
+                    end = cut;
+                }
+            }
+            String win = paragraph.substring(idx, end).trim();
+            if (!win.isEmpty()) {
+                out.add(win);
+            }
+            idx = end;
+        }
+        return out.isEmpty() ? Collections.singletonList(paragraph) : out;
+    }
+
     private List<DocumentChunk> chunkSection(Section section, int startChunkIndex) {
         List<DocumentChunk> chunks = new ArrayList<>();
         String content = section.content;
@@ -265,10 +313,43 @@ public class DocumentChunkService {
         int currentStartIndex = section.startIndex;
         int chunkIndex = startChunkIndex;
 
+        int maxSize = chunkConfig.getMaxSize();
         for (String paragraph : paragraphs) {
+            // 单个段落本身就超限（简历/表格型 PDF 抽出来的文本常常整篇没有一个空行）：
+            // 必须先把段落硬切成多个窗口，否则它会整段塞进一个分片，
+            // 导致「2355 字的简历只切出 1 片」——分片粒度失效，检索精度大幅下降。
+            if (paragraph.length() > maxSize) {
+                // 先把已累积的内容落盘
+                if (currentChunk.length() > 0) {
+                    String done = currentChunk.toString().trim();
+                    DocumentChunk c = new DocumentChunk(done, currentStartIndex,
+                            currentStartIndex + done.length(), chunkIndex++);
+                    c.setTitle(title);
+                    c.setHeadingPath(section.headingPath);
+                    chunks.add(c);
+                    currentStartIndex += done.length();
+                    currentChunk = new StringBuilder();
+                }
+                // 再按句子/空格边界硬切这个超长段落
+                List<String> windows = splitLongParagraph(paragraph, maxSize);
+                for (int w = 0; w < windows.size(); w++) {
+                    String win = windows.get(w);
+                    DocumentChunk c = new DocumentChunk(win, currentStartIndex,
+                            currentStartIndex + win.length(), chunkIndex++);
+                    c.setTitle(title);
+                    c.setHeadingPath(section.headingPath);
+                    chunks.add(c);
+                    currentStartIndex += win.length();
+                }
+                // 新分片带上一片的重叠，保持上下文连续
+                String tail = getOverlapText(windows.get(windows.size() - 1));
+                currentChunk = new StringBuilder(tail);
+                continue;
+            }
+
             // 如果当前分片加上新段落超过最大尺寸
             if (currentChunk.length() > 0 && 
-                currentChunk.length() + paragraph.length() > chunkConfig.getMaxSize()) {
+                currentChunk.length() + paragraph.length() > maxSize) {
                 
                 // 保存当前分片
                 String chunkContent = currentChunk.toString().trim();

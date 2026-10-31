@@ -74,6 +74,17 @@ public class VectorSearchService {
      * @return 搜索结果列表
      */
     public List<SearchResult> searchSimilarDocuments(String query, int topK) {
+        return searchSimilarDocuments(query, topK, this.scoreThreshold);
+    }
+
+    /**
+     * 带显式阈值的检索。
+     *
+     * <p>为什么单独一个参数：早期"兜底放宽阈值"通过临时改共享字段实现，
+     * 并发请求会互相覆盖（A 放宽时 B 也在放宽，读到的阈值不确定）。
+     * 阈值必须是**局部变量**。</p>
+     */
+    public List<SearchResult> searchSimilarDocuments(String query, int topK, float threshold) {
         // 降级模式：Milvus 不可用时返回空结果，调用方（RAG 检索）应据空结果走「无检索」兜底
         if (milvusClient == null) {
             logger.warn("Milvus 客户端不可用（降级模式），跳过向量检索，返回空结果。query={}", query);
@@ -126,12 +137,23 @@ public class VectorSearchService {
                 result.setContent((String) wrapper.getFieldData("content", 0).get(i));
                 result.setScore(wrapper.getIDScore(0).get(i).getScore());
                 rawScores.add(result.getScore()); // 先记原始分，便于校准阈值
+                // 临时诊断：打印每条候选的 score + 来源，定位"知识库有却检索不到"的干扰源
+                Object dbgMeta = wrapper.getFieldData("metadata", 0).get(i);
+                String dbgSrc = "?";
+                if (dbgMeta != null) {
+                    java.util.regex.Matcher mm = java.util.regex.Pattern
+                            .compile("\"_source\":\"([^\"]*)\"|\"user_id\":([0-9]+)").matcher(dbgMeta.toString());
+                    StringBuilder sb2 = new StringBuilder();
+                    while (mm.find()) sb2.append(mm.group(1) != null ? mm.group(1) : ("uid=" + mm.group(2))).append(' ');
+                    dbgSrc = sb2.toString().trim();
+                }
+                logger.info("【诊断】候选来源 score={} src={}", String.format("%.4f", result.getScore()), dbgSrc);
                 candidatesForLog.add(new RetrievalEvaluator.Candidate(result.getId(), result.getScore()));
 
                 // L2 平方距离阈值过滤（归一化向量下 L2²=2−2cos，阈值按 cos 折算后配置）
-                if (result.getScore() > scoreThreshold) {
+                if (result.getScore() > threshold) {
                     logger.debug("跳过低相关结果: score={}, threshold={}, id={}",
-                            result.getScore(), scoreThreshold, result.getId());
+                            result.getScore(), threshold, result.getId());
                     continue;
                 }
 
@@ -152,7 +174,7 @@ public class VectorSearchService {
                 Collections.sort(sorted);
                 logger.info("检索候选 {} 条, score 区间 [{}, {}], 阈值 {}, 通过 {} 条",
                         rawScores.size(), sorted.get(0), sorted.get(sorted.size() - 1),
-                        scoreThreshold, results.size());
+                        threshold, results.size());
                 logger.debug("检索明细: {}", RetrievalLogParser.toLogPayload(query, candidatesForLog));
             }
 
@@ -214,4 +236,88 @@ public class VectorSearchService {
             return null;
         }
     }
+
+    /**
+     * 带回退的检索：向量召回为空时，放宽阈值二次召回 + 关键词字面匹配。
+     *
+     * <p><b>为什么需要</b>：用户会按"自己的说法"提问（如「agent最新pdf」），
+     * 而文档实际叫《王浩杰-AI应用与智能体开发.pdf》——
+     * 两者语义距离明显（实测 L2² 1.12~1.51，全部超过阈值 1.0），
+     * 纯向量检索必然召回 0 条。此时应该用**字面关键词**兜底，
+     * 而不是让用户去猜文件全名。</p>
+     *
+     * <p>匹配策略（命中任一即算）：</p>
+     * <ol>
+     *   <li>文档内容包含查询里的某个关键词；</li>
+     *   <li>文件名包含查询里的某个关键词。</li>
+     * </ol>
+     * 关键词来自原始查询的分词（按空白/标点切，长度 ≥ 2 的片段）。
+     */
+    public List<SearchResult> searchWithKeywordFallback(String query, int topK) {
+        List<SearchResult> direct = searchSimilarDocuments(query, topK);
+        if (direct != null && !direct.isEmpty()) {
+            return direct;
+        }
+        if (query == null || query.isBlank()) {
+            return direct == null ? Collections.emptyList() : direct;
+        }
+        try {
+            // 1) 放宽阈值再召回一次：拿到"语义最近但没达阈值"的分片
+            List<SearchResult> relaxed = searchSimilarDocuments(query, topK, Float.MAX_VALUE);
+            if (relaxed.isEmpty()) {
+                return relaxed;
+            }
+            // 2) 关键词字面过滤：查询切出的片段在 content 或 _source 里出现
+            List<String> keywords = extractKeywords(query);
+            if (keywords.isEmpty()) {
+                // 没有可用关键词：接受放宽后的 Top1，避免完全无结果
+                logger.info("关键词兜底：无有效关键词，返回放宽阈值的 Top1");
+                return relaxed.subList(0, Math.min(1, relaxed.size()));
+            }
+            List<SearchResult> matched = new ArrayList<>();
+            for (SearchResult r : relaxed) {
+                String content = r.getContent() == null ? "" : r.getContent();
+                String meta = r.getMetadata() == null ? "" : r.getMetadata();
+                for (String kw : keywords) {
+                    if (content.contains(kw) || meta.contains(kw)) {
+                        matched.add(r);
+                        logger.info("关键词兜底命中: kw={} score={} source={}", kw,
+                                String.format("%.4f", r.getScore()), shortSource(meta));
+                        break;
+                    }
+                }
+            }
+            if (!matched.isEmpty()) {
+                logger.info("关键词兜底：放宽召回 {} 条 → 字面命中 {} 条", relaxed.size(), matched.size());
+                return matched.subList(0, Math.min(topK, matched.size()));
+            }
+            // 3) 字面也没命中：退回放宽后的 Top1（总比"知识库没有"好，且模型会看到真实内容）
+            logger.info("关键词兜底：字面未命中，返回放宽阈值 Top1");
+            return relaxed.subList(0, Math.min(1, relaxed.size()));
+        } catch (Exception e) {
+            logger.warn("关键词兜底失败: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /** 从查询里切出用于字面匹配的关键词（长度 ≥ 2，去重，最多 8 个） */
+    static List<String> extractKeywords(String query) {
+        if (query == null) return Collections.emptyList();
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String part : query.split("[\\s,，。、;；:：!！?？()（）\\[\\]/\\\\|\"']+")) {
+            String t = part.trim();
+            if (t.length() >= 2) {
+                out.add(t);
+            }
+            if (out.size() >= 8) break;
+        }
+        return new ArrayList<>(out);
+    }
+
+    private static String shortSource(String meta) {
+        if (meta == null) return "?";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"_source\":\"([^\"]*)\\\"").matcher(meta);
+        return m.find() ? m.group(1) : "?";
+    }
+
 }

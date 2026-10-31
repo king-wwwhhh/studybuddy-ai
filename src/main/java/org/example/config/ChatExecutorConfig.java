@@ -1,5 +1,6 @@
 package org.example.config;
 
+import org.example.auth.AuthContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -65,7 +66,35 @@ public class ChatExecutorConfig {
                 core, max, keepAliveSeconds, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(queue),
                 namedThreadFactory(),
-                rejectionPolicy);
+                rejectionPolicy) {
+            /**
+             * 关键：把提交线程的**用户上下文**带进工作线程。
+             *
+             * <p>踩过的坑：AuthContext 是 ThreadLocal，SSE 对话在 chat-sse-* 线程里执行，
+             * 过滤条件取不到登录用户 → OwnerSupport.currentUserId() 退化为 0（SYSTEM），
+             * 于是知识库检索变成"只查系统数据"，用户自己的文档一条都召回不到，
+             * 表现为"文件明明在知识库里，却一直说没找到"。</p>
+             */
+            @Override
+            public void execute(Runnable command) {
+                AuthContext.Principal principal = AuthContext.get();
+                super.execute(() -> {
+                    AuthContext.Principal prev = AuthContext.get();
+                    try {
+                        if (principal != null) {
+                            AuthContext.set(principal);
+                        }
+                        command.run();
+                    } finally {
+                        if (prev != null) {
+                            AuthContext.set(prev);
+                        } else {
+                            AuthContext.clear();
+                        }
+                    }
+                });
+            }
+        };
         pool.allowCoreThreadTimeOut(false);
         logger.info("chat 线程池初始化: core={} max={} queue={} keepAlive={}s 拒绝策略={}",
                 core, max, queue, keepAliveSeconds, rejectionPolicy.getClass().getSimpleName());

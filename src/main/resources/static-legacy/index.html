@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>期末速成助手 · StudyBuddy</title>
     <!-- 自包含：不再依赖任何外网 CDN，离线 / 独立预览均可正常运行 -->
-    <link rel="stylesheet" href="/legacy/styles.css">
+    <link rel="stylesheet" href="/legacy/styles.css?v=3">
 </head>
 <body>
     <!-- 全屏粒子特效层（液态拖尾 + 辉光 + 点击水波） -->
@@ -59,7 +59,6 @@
             </nav>
 
             <div class="nav-foot">
-                <!-- 当前登录用户 + 退出（旧版无登录体系，多用户改造后新增） -->
                 <div class="user-chip" id="userChip">
                     <span class="user-dot"></span>
                     <span class="user-name" id="userName">未登录</span>
@@ -146,6 +145,9 @@
                         <p class="view-sub">上传笔记 / 课件，自动解析切分并向量化入库</p>
                     </div>
                     <div class="head-actions">
+                        <button class="ghost-btn danger-ghost" id="clearAllKbBtn" title="清空知识库中的全部资料">
+                            🗑 全部删除
+                        </button>
                         <label class="primary-btn">
                             上传资料
                             <input type="file" id="kbFileInput" multiple accept=".txt,.md,.markdown,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" style="display:none">
@@ -243,7 +245,7 @@
                 <button class="x-close" id="createPlanModalClose" aria-label="close">×</button>
             </div>
             <div class="modal-body">
-                <p class="modal-tip">填好下面基础信息后会进入「复习计划」视图，可以一步步手动加任务，也可以再用 AI 一次补全。</p>
+                <p class="modal-tip">填好基础信息，默认由 AI 按天拆任务写入计划；取消勾选则只建空计划，稍后手动添加任务。</p>
                 <div class="form-grid two-col">
                     <label>标题<span class="req">*</span></label>
                     <input id="cpTitle" type="text" placeholder="如：期末高数上速成" />
@@ -266,9 +268,43 @@
                     <label>备注（基础 / 偏好 / 重点）</label>
                     <textarea id="cpNotes" rows="3" placeholder="例如：上次高数期末 62 分；向量计算比较弱；偏好先做真题再补概念"></textarea>
                 </div>
+                <label class="ai-toggle"><input type="checkbox" id="cpAiTasks" checked /> 保存后用 AI 按天拆任务（推荐）</label>
                 <div class="modal-actions">
                     <button class="ghost-btn" id="cpCancel">取消</button>
                     <button class="primary-btn" id="cpSubmit">保存计划</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 每日打卡 -->
+    <div class="modal-mask" id="checkinModal" hidden>
+        <div class="modal glass-card">
+            <div class="modal-head">
+                <h3>📅 今日打卡</h3>
+                <button class="x-close" id="checkinModalClose" aria-label="close">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">勾选今天完成的任务，写写今天做了什么——会带时间记录到计划的完成详情里。</p>
+                <div class="ci-plan-name" id="ciPlanName"></div>
+                <label class="ci-label">今日任务</label>
+                <div class="ci-tasks" id="ciTasks"></div>
+                <label class="ci-label">今天做了什么</label>
+                <textarea id="ciText" rows="3" placeholder="例如：复习了定积分章节，做了 3 道真题；整理了错题本"></textarea>
+                <div class="form-grid two-col">
+                    <label>学习时长（分钟）</label>
+                    <input id="ciMinutes" type="number" min="0" step="5" value="60" />
+                    <label>今日心情</label>
+                    <select id="ciMood">
+                        <option value="😀">😀 很棒</option>
+                        <option value="🙂">🙂 还行</option>
+                        <option value="😐">😐 一般</option>
+                        <option value="😩">😩 有点累</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="ghost-btn" id="ciCancel">取消</button>
+                    <button class="primary-btn" id="ciSubmit">打卡提交</button>
                 </div>
             </div>
         </div>
@@ -387,7 +423,21 @@
             <div class="loading-subtext" id="loadingSub">后端正在努力工作</div>
         </div>
     </div>
+    <!-- 通用确认弹窗（替代原生 confirm，样式与主题一致） -->
+    <div class="modal-mask" id="confirmModal" hidden>
+        <div class="modal glass-card confirm-modal">
+            <div class="confirm-icon" id="confirmIcon">⚠️</div>
+            <h3 class="confirm-title" id="confirmTitle">确认操作</h3>
+            <p class="confirm-text" id="confirmText"></p>
+            <p class="confirm-hint" id="confirmHint" hidden></p>
+            <div class="confirm-actions">
+                <button class="ghost-btn" id="confirmCancel">取消</button>
+                <button class="primary-btn danger" id="confirmOk">确定删除</button>
+            </div>
+        </div>
+    </div>
 
-    <script src="/legacy/app.js"></script>
+
+    <script src="/legacy/app.js?v=3"></script>
 </body>
 </html>

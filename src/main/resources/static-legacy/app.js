@@ -1,4 +1,63 @@
-/* ===== 鉴权注入：与 Vue 登录页共用 localStorage.token ===== */
+
+/* ===== 通用确认弹窗（替代原生 confirm，返回 Promise<boolean>） ===== */
+function showConfirm(options) {
+    const opts = Object.assign({
+        title: '确认操作',
+        text: '',
+        hint: '',
+        okText: '确定',
+        cancelText: '取消',
+        icon: '⚠️',
+        danger: true
+    }, options || {});
+
+    return new Promise((resolve) => {
+        const mask = document.getElementById('confirmModal');
+        const titleEl = document.getElementById('confirmTitle');
+        const textEl = document.getElementById('confirmText');
+        const hintEl = document.getElementById('confirmHint');
+        const iconEl = document.getElementById('confirmIcon');
+        const okBtn = document.getElementById('confirmOk');
+        const cancelEl = document.getElementById('confirmCancel');
+
+        titleEl.textContent = opts.title;
+        textEl.innerHTML = opts.text;
+        iconEl.textContent = opts.icon;
+        okBtn.textContent = opts.okText;
+        cancelEl.textContent = opts.cancelText;
+        okBtn.classList.toggle('danger', !!opts.danger);
+        mask.querySelector('.confirm-modal').classList.toggle('info', !opts.danger);
+
+        if (opts.hint) { hintEl.innerHTML = opts.hint; hintEl.hidden = false; }
+        else { hintEl.hidden = true; }
+
+        mask.hidden = false;
+
+        function cleanup(result) {
+            mask.hidden = true;
+            okBtn.removeEventListener('click', onOk);
+            cancelEl.removeEventListener('click', onCancel);
+            mask.removeEventListener('click', onMask);
+            document.removeEventListener('keydown', onKey);
+            resolve(result);
+        }
+        function onOk() { cleanup(true); }
+        function onCancel() { cleanup(false); }
+        function onMask(e) { if (e.target === mask) cleanup(false); }
+        function onKey(e) {
+            if (e.key === 'Escape') cleanup(false);
+            if (e.key === 'Enter') cleanup(true);
+        }
+
+        okBtn.addEventListener('click', onOk);
+        cancelEl.addEventListener('click', onCancel);
+        mask.addEventListener('click', onMask);
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => okBtn.focus(), 50);
+    });
+}
+
+/* ===== 鉴权注入（与 Vue 登录页共用 localStorage.token）===== */
 (function patchFetch() {
     const orig = window.fetch.bind(window);
     window.fetch = function (input, init) {
@@ -19,6 +78,25 @@
         });
     };
 })();
+
+/* ===== 当前用户 + 退出 ===== */
+function initUserChip() {
+    const nameEl = document.getElementById('userName');
+    const btn = document.getElementById('logoutBtn');
+    const chip = document.getElementById('userChip');
+    let user = null;
+    try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch (e) {}
+    if (!user || !localStorage.getItem('token')) { location.replace('/#/login'); return; }
+    if (nameEl) nameEl.textContent = user.nickname || user.email || ('用户 ' + (user.userId || ''));
+    if (chip) chip.setAttribute('title', (user.email || '') + (user.role === 'ADMIN' ? '（管理员）' : ''));
+    if (btn) btn.addEventListener('click', async () => {
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('lastSessionId');
+        location.replace('/#/login');
+    });
+}
 // 期末速成助手 前端应用（手写 SPA）
 // 设计要点：
 //  1) 完全自包含，不依赖任何外网 CDN（内置轻量 Markdown 解析）
@@ -43,10 +121,10 @@ class StudyBuddyApp {
         this.selectedModel = '';
         this.BUILTIN_MODELS = [
             { id: '', name: '默认模型', builtin: true },
-            { id: 'qwen3-max', name: 'Qwen3-Max（最强）', builtin: true },
-            { id: 'qwen3-30b-a3b-thinking-2507', name: 'Qwen3-30B 思维版', builtin: true },
-            { id: 'qwen3-plus', name: 'Qwen3-Plus', builtin: true },
-            { id: 'qwen3-turbo', name: 'Qwen3-Turbo（最快）', builtin: true }
+            { id: 'qwen3.7-max', name: 'Qwen3.7-Max（旗舰）', builtin: true },
+            { id: 'qwen-max', name: 'Qwen-Max（经典旗舰）', builtin: true },
+            { id: 'qwen-plus', name: 'Qwen-Plus（均衡）', builtin: true },
+            { id: 'qwen-flash', name: 'Qwen-Flash（最快）', builtin: true }
         ];
         this.customModels = this.loadCustomModels();
         this.sessionId = this.generateSessionId();
@@ -372,6 +450,7 @@ class StudyBuddyApp {
             this.persist();
             return { message: name + ' 已入库（演示）' };
         }
+        if (/^\/knowledge\/.+$/.test(path) && method === 'DELETE') return true;
 
         if (path === '/plans' && method === 'GET') return this.store.plans;
         if (path === '/plans' && method === 'POST') { const p = this.makePlan(body); this.store.plans.unshift(p); this.persist(); return p; }
@@ -411,11 +490,11 @@ class StudyBuddyApp {
         if (path === '/profile' && method === 'GET') return this.store.profile;
         if (path === '/profile' && method === 'PUT') { this.store.profile = Object.assign({}, this.store.profile, body); this.persist(); return this.store.profile; }
         if (path === '/memory/sessions') return { sessions: this.store.sessions };
-        if (path === '/models' && method === 'GET') return { current: 'qwen3-max', models: [
-            { id: 'qwen3-max', name: 'Qwen3-Max（最强）', description: '通义千问最强旗舰' },
-            { id: 'qwen3-30b-a3b-thinking-2507', name: 'Qwen3-30B 思维版', description: '轻量思维模型' },
-            { id: 'qwen3-plus', name: 'Qwen3-Plus', description: '均衡性价比' },
-            { id: 'qwen3-turbo', name: 'Qwen3-Turbo（最快）', description: '极速响应' }
+        if (path === '/models' && method === 'GET') return { current: 'qwen3.7-max', models: [
+            { id: 'qwen3.7-max', name: 'Qwen3.7-Max（旗舰）', description: '通义千问旗舰' },
+            { id: 'qwen-max', name: 'Qwen-Max', description: '经典旗舰' },
+            { id: 'qwen-plus', name: 'Qwen-Plus', description: '均衡性价比' },
+            { id: 'qwen-flash', name: 'Qwen-Flash（最快）', description: '极速响应' }
         ] };
         return null;
     }
@@ -510,6 +589,7 @@ class StudyBuddyApp {
         document.getElementById('fileInput').addEventListener('change', e => { if (e.target.files[0]) this.uploadKnowledge(e.target.files[0]); e.target.value = ''; });
         document.querySelectorAll('.suggest').forEach(b => b.addEventListener('click', () => { document.getElementById('messageInput').value = b.dataset.q; this.sendMessage(); }));
 
+        document.getElementById('clearAllKbBtn')?.addEventListener('click', () => this.clearAllKnowledge());
         document.getElementById('kbFileInput').addEventListener('change', e => { [...e.target.files].forEach(f => this.uploadKnowledge(f)); e.target.value = ''; });
         const dz = document.getElementById('dropZone');
         ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
@@ -533,6 +613,10 @@ class StudyBuddyApp {
         document.getElementById('cpCancel').addEventListener('click', () => this.closeCreatePlanModal());
         document.getElementById('cpSubmit').addEventListener('click', () => this.submitCreatePlan());
         document.getElementById('createPlanModal').addEventListener('click', e => { if (e.target.id === 'createPlanModal') this.closeCreatePlanModal(); });
+        document.getElementById('checkinModalClose').addEventListener('click', () => this.closeCheckinModal());
+        document.getElementById('ciCancel').addEventListener('click', () => this.closeCheckinModal());
+        document.getElementById('ciSubmit').addEventListener('click', () => this.submitCheckin());
+        document.getElementById('checkinModal').addEventListener('click', e => { if (e.target.id === 'checkinModal') this.closeCheckinModal(); });
 
         // AI 规划（详细表单）
         document.getElementById('aiPlanModalClose').addEventListener('click', () => this.closeAiPlanModal());
@@ -886,6 +970,12 @@ class StudyBuddyApp {
     /* ---------- 知识库 ---------- */
     async uploadKnowledge(file) {
         if (!file) return;
+        // 后端限制 100MB（application.yml spring.servlet.multipart.max-file-size），提前拦截，避免 413 空响应
+        const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+        if (file.size > MAX_UPLOAD_BYTES) {
+            this.toast('文件过大：超过 100MB 限制', 'error');
+            return;
+        }
         this._pendingUploadName = file.name;
         this.showOverlay(true, '上传到知识库…', file.name);
         try {
@@ -906,6 +996,7 @@ class StudyBuddyApp {
                 let data = null;
                 try { data = JSON.parse(txt); } catch (_) { data = { raw: txt }; }
                 // 后端 ApiResponse 形态：{code:500, message:'...', data:null} 表示失败
+                if (res.status === 413) throw new Error('文件过大，超过服务器限制（最大 100MB）');
                 if (res.status >= 400) throw new Error('HTTP ' + res.status + ' ' + (data && data.message ? data.message : ''));
                 if (data && data.code === 500) throw new Error(data.message || '上传失败');
                 const payload = data && data.data;
@@ -920,30 +1011,658 @@ class StudyBuddyApp {
             this._pendingUploadName = '';
         }
     }
-    if (nameEl) nameEl.textContent = user.nickname || user.email || ('用户 ' + (user.userId || ''));
-    chip && chip.setAttribute('title', (user.email || '') + (user.role === 'ADMIN' ? '（管理员）' : ''));
+    async syncKnowledge() {
+        this.showOverlay(true, '从 GitHub 同步…');
+        try { const data = await this.apiJson('/knowledge/sync', {}); this.toast((data && data.message) || '同步完成', 'success'); await this.loadKnowledge(); }
+        catch (e) { this.toast('同步失败：' + e.message, 'error'); }
+        finally { this.showOverlay(false); }
+    }
+    async loadKnowledge() {
+        const list = document.getElementById('kbList');
+        const fmtDate = v => {
+            if (!v) return '';
+            if (Array.isArray(v)) {
+                // JDBC 驱动有时返回 [yyyy, MM, dd, HH, mm, ss, ns] 数组
+                const [y, M, d, h = 0, m = 0, s = 0] = v;
+                return `${y}-${String(M).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            }
+            return String(v).substring(0, 10);
+        };
+        const sz = f => f.fileSize || f.sizeBytes || 0;
+        try {
+            const data = await this.api('/knowledge/list', {});
+            // 后端 /api/knowledge/list 的实际形态：ApiResponse({code:200,data:[...]})
+            // 经 api() 解析后这里 data 就是数组；但保留对旧 {files:[...]} 的兼容
+            const items = Array.isArray(data) ? data : ((data && data.files) || []);
+            if (!items.length) { list.innerHTML = '<div class="empty">还没有资料，上传或拖入文件开始吧。</div>'; return; }
+            list.innerHTML = items.map(f => `
+                <div class="kb-item">
+                    <div class="kb-icon">${this.fileEmoji(f.fileName)}</div>
+                    <div class="kb-meta">
+                        <div class="kb-name">${this.escapeHtml(f.fileName)}</div>
+                        <div class="kb-sub">${f.chunkCount || f.chunks || 0} 段 · ${this.fmtSize(sz(f))} · ${f.uploadedAt || fmtDate(f.updatedAt) || ''}</div>
+                    </div>
+                    <span class="kb-status ${(f.status === 'READY') ? 'ok' : 'warn'}">${f.status === 'READY' ? '已向量化' : (f.status || '处理中')}</span>
+                    <button class="kb-del" data-kbdel="${f.id != null ? f.id : ''}" data-name="${this.escapeHtml(f.fileName)}" title="删除该文件">🗑</button>
+                </div>`).join('');
+            list.querySelectorAll('[data-kbdel]').forEach(b => b.addEventListener('click', () => this.deleteKnowledge(b.dataset.kbdel, b.dataset.name)));
+        } catch (e) { list.innerHTML = '<div class="empty">加载失败：' + this.escapeHtml(e.message) + '</div>'; }
+    }
+    async deleteKnowledge(id, name) {
+        const ok = await showConfirm({
+            title: '删除资料',
+            text: '确定要删除 <strong>' + this.escapeHtml(name) + '</strong> 吗？',
+            hint: '该文件的向量与解析记录会被永久移除，删除后无法恢复。',
+            okText: '删除',
+            icon: '🗑'
+        });
+        if (!ok) return;
+        try {
+            if (this.demo || !id) {
+                this.store.kb = (this.store.kb || []).filter(f => f.fileName !== name);
+                this.persist();
+                this.toast('已删除（演示）', 'success');
+                await this.loadKnowledge();
+                return;
+            }
+            const res = await fetch(this.apiBaseUrl + '/knowledge/' + id, { method: 'DELETE' });
+            const txt = await res.text();
+            let data = null; try { data = JSON.parse(txt); } catch (_) { data = { raw: txt }; }
+            if (res.status >= 400) throw new Error('HTTP ' + res.status + (data && data.message ? ' ' + data.message : ''));
+            if (data && data.code === 500) throw new Error(data.message || '删除失败');
+            this.toast('已删除「' + name + '」', 'success');
+            await this.loadKnowledge();
+        } catch (e) { this.toast('删除失败：' + (e.message || e), 'error'); }
+    }
 
-    btn && btn.addEventListener('click', async () => {
-        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        localStorage.removeItem('lastSessionId');
-        location.replace('/#/login');
-    });
+    /** 一键清空知识库（后端一次调用，只删自己的） */
+    async clearAllKnowledge() {
+        let count = 0;
+        try {
+            const data = await this.api('/knowledge/list', {});
+            const items = Array.isArray(data) ? data : ((data && data.files) || []);
+            count = items.length;
+        } catch (e) { /* 拿不到就按未知数量处理 */ }
+
+        if (count === 0) { this.toast('知识库已经是空的', 'info'); return; }
+
+        const ok = await showConfirm({
+            title: '清空知识库',
+            text: '确定要删除全部 <strong>' + count + '</strong> 份资料吗？',
+            hint: '所有文件的向量与解析记录都会被永久移除，且无法恢复。此操作只影响你自己的知识库。',
+            okText: '全部删除',
+            icon: '🔥'
+        });
+        if (!ok) return;
+
+        const btn = document.getElementById('clearAllKbBtn');
+        if (btn) { btn.disabled = true; btn.textContent = '删除中…'; }
+        try {
+            const deleted = await this.api('/knowledge/all', { method: 'DELETE' });
+            const n = (typeof deleted === 'number') ? deleted : count;
+            this.toast('已删除 ' + n + ' 份资料', 'success');
+            await this.loadKnowledge();
+        } catch (e) {
+            this.toast('清空失败：' + e.message, 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '🗑 全部删除'; }
+        }
+    }
+    fileEmoji(n) { const e = n.toLowerCase().split('.').pop(); return { pdf: '📕', doc: '📘', docx: '📘', ppt: '📙', pptx: '📙', xls: '📗', xlsx: '📗', md: '📝', markdown: '📝', txt: '📄' }[e] || '📄'; }
+    fmtSize(b) { if (!b) return ''; const k = 1024, s = ['B', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(b) / Math.log(k)); return (b / Math.pow(k, i)).toFixed(1) + s[i]; }
+
+    /* ---------- 计划 ---------- */
+    async loadPlans() { await this.renderPlans(); await this.loadQuizPlans(); }
+    async renderPlans() {
+        const wrap = document.getElementById('plansWrap');
+        try {
+            const plans = await this.api('/plans', {});
+            if (!plans || !plans.length) { wrap.innerHTML = '<div class="empty">还没有计划，点「新建计划」或「AI 帮我规划」。</div>'; return; }
+            wrap.innerHTML = plans.map(p => this.planCard(p)).join('');
+            this.bindPlanCards();
+        } catch (e) { wrap.innerHTML = '<div class="empty">加载失败：' + this.escapeHtml(e.message) + '</div>'; }
+    }
+    planCard(p) {
+        const tasks = p.tasks || [];
+        const done = tasks.filter(t => t.status === 'DONE').length;
+        const total = tasks.length || 1;
+        const pct = Math.round(done / total * 100);
+        const groups = this.groupTasksByDay(tasks);
+        const daysHtml = groups.map(g => {
+            const gTasks = g.tasks || [];
+            const gDone = gTasks.filter(t => t.status === 'DONE').length;
+            const gTotal = gTasks.length;
+            const allDone = gTotal > 0 && gDone === gTotal;
+            const phaseChip = g.phase ? `<span class="phase-chip">${this.escapeHtml(g.phase)}</span>` : '';
+            const dayLabel = g.day != null ? `Day ${g.day}` : '未排期';
+            const dateStr = g.scheduledDate ? this.fmtDay(g.scheduledDate) : '';
+            const ratio = gTotal ? `<span class="day-ratio ${allDone ? 'all-done' : ''}">${gDone}/${gTotal} 完成</span>` : '';
+            const rows = gTasks.map(t => `
+                <div class="day-task ${t.status === 'DONE' ? 'done' : ''} ${t.status === 'DOING' ? 'doing' : ''}">
+                    <div class="day-task-main">
+                        <div class="day-task-title">
+                            <span class="day-dot"></span>
+                            <span>${this.escapeHtml(t.title)}</span>
+                        </div>
+                        <div class="day-task-tags">
+                            ${t.chapter ? `<span class="chapter-tag">📖 ${this.escapeHtml(t.chapter)}</span>` : ''}
+                            ${this.taskTime(t) ? `<span class="chapter-tag hour">⏱ ${this.escapeHtml(this.taskTime(t))}</span>` : ''}
+                        </div>
+                        ${t.description ? `<div class="day-task-desc">${this.escapeHtml(t.description)}</div>` : ''}
+                        ${t.completionNote ? `<div class="day-task-note">✍️ ${this.escapeHtml(t.completionNote)}</div>` : ''}
+                        <div class="tl-actions">
+                            <button class="mini ${t.status === 'DONE' ? '' : 'primary'}" data-act="DONE" data-p="${p.id}" data-t="${t.id}">完成</button>
+                            <button class="mini" data-act="DOING" data-p="${p.id}" data-t="${t.id}">进行中</button>
+                            <button class="mini" data-act="TODO" data-p="${p.id}" data-t="${t.id}">重置</button>
+                        </div>
+                    </div>
+                </div>`).join('');
+            return `
+            <div class="plan-day ${allDone ? 'complete' : ''}">
+                <div class="plan-day-head">
+                    <span class="day-name">${dayLabel}</span>
+                    ${dateStr ? `<span class="day-date">${dateStr}</span>` : ''}
+                    ${phaseChip}
+                    ${ratio ? `<span class="day-ratio-wrap">${ratio}</span>` : ''}
+                </div>
+                <div class="plan-day-body">${rows || '<div class="empty small">暂无任务</div>'}</div>
+            </div>`;
+        }).join('');
+        return `
+        <div class="plan-card glass-card" data-plan="${p.id}">
+            <div class="plan-head">
+                <div>
+                    <h3>${this.escapeHtml(p.title)}</h3>
+                    <div class="plan-sub">${this.escapeHtml(p.subject || '')} ${p.examDate ? '· 考试 ' + this.escapeHtml(p.examDate) : ''}</div>
+                    <div class="plan-meta">
+                        ${p.priority != null ? `<span class="pm-pill">优先级 ${this.escapeHtml(String(p.priority))} / 5</span>` : ''}
+                        ${p.hoursPerDay != null ? `<span class="pm-pill">每天 ${this.escapeHtml(String(p.hoursPerDay))} h</span>` : ''}
+                        ${p.totalDays ? `<span class="pm-pill">共 ${this.escapeHtml(String(p.totalDays))} 天</span>` : ''}
+                        ${tasks.length ? `<span class="pm-pill">已拆 ${tasks.length} 个任务</span>` : ''}
+                    </div>
+                    ${p.notes ? `<div class="plan-sub" style="margin-top:6px">备注：${this.escapeHtml(p.notes)}</div>` : ''}
+                </div>
+                <div class="plan-progress"><div class="ring" style="--p:${pct}"><span>${pct}%</span></div></div>
+            </div>
+            <div class="plan-bar"><div class="plan-bar-fill" style="width:${pct}%"></div></div>
+            <div class="plan-days">${daysHtml || '<div class="empty small">暂无任务</div>'}</div>
+            <div class="plan-foot">
+                <button class="mini" data-replan="${p.id}">✨ 教练重排</button>
+                <button class="mini" data-checkin2="${p.id}">📅 打卡</button>
+                <button class="mini" data-dash="${p.id}">📊 看板</button>
+                <button class="mini" data-weak="${p.id}">🔥 薄弱点</button>
+                <button class="mini danger" data-delplan="${p.id}">删除</button>
+            </div>
+            <div class="plan-extra" id="extra-${p.id}"></div>
+        </div>`;
+    }
+    taskTime(t) {
+        const h = t.expectedHours != null ? t.expectedHours : (t.estimatedTime ? parseFloat(t.estimatedTime) : null);
+        if (h == null || isNaN(h)) return '';
+        return '约 ' + h + ' 小时';
+    }
+    groupTasksByDay(tasks) {
+        const map = new Map();
+        const unscheduled = [];
+        for (const t of tasks) {
+            if (t.day == null) { unscheduled.push(t); continue; }
+            if (!map.has(t.day)) map.set(t.day, { day: t.day, scheduledDate: t.scheduledDate, phase: t.phase, tasks: [] });
+            map.get(t.day).tasks.push(t);
+        }
+        const days = Array.from(map.values()).sort((a, b) => a.day - b.day);
+        if (unscheduled.length) days.push({ day: null, scheduledDate: null, phase: null, tasks: unscheduled });
+        return days;
+    }
+    fmtDay(dateStr) {
+        if (dateStr == null || dateStr === '') return '';
+        let M, d;
+        if (Array.isArray(dateStr)) {
+            // JDBC 驱动把 LocalDate 序列化成 [yyyy, MM, dd, ...] 数组
+            [, M, d] = dateStr;
+        } else {
+            const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (!m) return String(dateStr);
+            M = m[2]; d = m[3];
+        }
+        if (M == null || d == null) return String(dateStr);
+        return Number(M) + '月' + Number(d) + '日';
+    }
+    bindPlanCards() {
+        document.querySelectorAll('.plan-card').forEach(card => {
+            const pid = card.dataset.plan;
+            card.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', async () => {
+                await this.api(`/plans/${pid}/tasks/${b.dataset.t}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: b.dataset.act }) });
+                await this.renderPlans();
+            }));
+            const checkin = card.querySelector('[data-checkin2]'); if (checkin) checkin.addEventListener('click', () => this.openCheckinModal(pid));
+            const replan = card.querySelector('[data-replan]'); if (replan) replan.addEventListener('click', () => this.replan(pid));
+            const dash = card.querySelector('[data-dash]'); if (dash) dash.addEventListener('click', () => this.dashboard(pid, card));
+            const weak = card.querySelector('[data-weak]'); if (weak) weak.addEventListener('click', () => this.weakness(pid, card));
+            const del = card.querySelector('[data-delplan]'); if (del) del.addEventListener('click', async () => { { const ok = await showConfirm({ title: '删除计划', text: '确定要删除这个学习计划吗？', hint: '计划下的所有任务与打卡记录会一并删除，且无法恢复。', okText: '删除', icon: '📅' }); if (ok) { await this.api('/plans/' + pid, { method: 'DELETE' }); await this.renderPlans(); } } });
+        });
+    }
+    async createPlan() {
+        // 替代原来的 prompt() 三连；改为打开专用表单
+        this.openCreatePlanModal();
+    }
+    openCreatePlanModal() {
+        const m = document.getElementById('createPlanModal');
+        if (!m) return;
+        document.getElementById('cpTitle').value = '';
+        document.getElementById('cpSubject').value = '';
+        document.getElementById('cpExamDate').value = '';
+        document.getElementById('cpTotalDays').value = '14';
+        document.getElementById('cpHoursPerDay').value = '2';
+        document.getElementById('cpPriority').value = '3';
+        document.getElementById('cpNotes').value = '';
+        m.hidden = false;
+        setTimeout(() => document.getElementById('cpTitle').focus(), 80);
+    }
+    closeCreatePlanModal() { document.getElementById('createPlanModal').hidden = true; }
+    async submitCreatePlan() {
+        const title = document.getElementById('cpTitle').value.trim();
+        const subject = document.getElementById('cpSubject').value.trim();
+        const examDate = document.getElementById('cpExamDate').value;
+        const totalDays = Number(document.getElementById('cpTotalDays').value) || 14;
+        const hoursPerDay = Number(document.getElementById('cpHoursPerDay').value) || 2;
+        const priority = Number(document.getElementById('cpPriority').value) || 3;
+        const notes = document.getElementById('cpNotes').value.trim();
+        const aiOn = document.getElementById('cpAiTasks') && document.getElementById('cpAiTasks').checked;
+        if (!title) { this.toast('请填写标题', 'warning'); return; }
+        if (aiOn) {
+            // AI 按天拆任务：把表单信息交给 /plans/ai-detailed，AI 完善并落库
+            this.showOverlay(true, 'AI 规划中…', 'AI 正在按你填写的信息拆解每日任务，约需 30~60 秒');
+            try {
+                const data = await this.apiJson('/plans/ai-detailed', { title, subject, examDate, totalDays, hoursPerDay, priority, notes, topics: notes });
+                const tasks = (data && data.tasks) || [];
+                this.toast('已生成 ' + tasks.length + ' 条任务，覆盖 ' + totalDays + ' 天', 'success', 6000);
+                this.closeCreatePlanModal();
+                await this.renderPlans();
+                await this.loadQuizPlans();
+            } catch (e) { this.toast('规划失败：' + this.escapeHtml(e.message), 'error'); }
+            finally { this.showOverlay(false); }
+            return;
+        }
+        try {
+            await this.apiJson('/plans', { title, subject, examDate, totalDays, hoursPerDay, priority, notes, goalText: title });
+            this.toast('计划已创建（空计划，可手动加任务）', 'success');
+            this.closeCreatePlanModal();
+            await this.renderPlans();
+            await this.loadQuizPlans();
+        } catch (e) { this.toast('失败：' + this.escapeHtml(e.message), 'error'); }
+    }
+    async aiPlan() {
+        // 替代原来单个 prompt()，改为打开专用 AI 表单
+        this.openAiPlanModal();
+    }
+    openAiPlanModal() {
+        const m = document.getElementById('aiPlanModal');
+        if (!m) return;
+        document.getElementById('apTitle').value = '';
+        document.getElementById('apSubject').value = '';
+        document.getElementById('apExamDate').value = '';
+        document.getElementById('apTotalDays').value = '14';
+        document.getElementById('apHoursPerDay').value = '2';
+        document.getElementById('apPriority').value = '3';
+        document.getElementById('apTopics').value = '';
+        document.getElementById('apNotes').value = '';
+        m.hidden = false;
+        setTimeout(() => document.getElementById('apTitle').focus(), 80);
+    }
+    closeAiPlanModal() { document.getElementById('aiPlanModal').hidden = true; }
+    async submitAiPlan() {
+        const title = document.getElementById('apTitle').value.trim();
+        if (!title) { this.toast('请填写标题', 'warning'); return; }
+        const subject = document.getElementById('apSubject').value.trim();
+        const examDate = document.getElementById('apExamDate').value;
+        const totalDays = Number(document.getElementById('apTotalDays').value) || 14;
+        const hoursPerDay = Number(document.getElementById('apHoursPerDay').value) || 2;
+        const priority = Number(document.getElementById('apPriority').value) || 3;
+        const topics = document.getElementById('apTopics').value.trim();
+        const notes = document.getElementById('apNotes').value.trim();
+        this.showOverlay(true, 'AI 规划中…', '规划师正在按天拆任务，AI 生成 + 知识库检索约需 30~60 秒');
+        try {
+            const data = await this.apiJson('/plans/ai-detailed', { title, subject, examDate, totalDays, hoursPerDay, priority, notes, topics });
+            const tasks = (data && data.tasks) || [];
+            this.toast('已生成 ' + tasks.length + ' 条任务，覆盖 ' + totalDays + ' 天', 'success', 6000);
+            this.closeAiPlanModal();
+            await this.renderPlans();
+            await this.loadQuizPlans();
+        } catch (e) { this.toast('规划失败：' + this.escapeHtml(e.message), 'error'); }
+        finally { this.showOverlay(false); }
+    }
+    async replan(pid) {
+        this.showOverlay(true, '教练重排中…');
+        try { await this.apiJson('/plans/' + pid + '/replan', {}); await this.renderPlans(); this.toast('已重排', 'success'); }
+        catch (e) { this.toast('失败：' + e.message, 'error'); }
+        finally { this.showOverlay(false); }
+    }
+    todayStr() {
+        const d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    normDate(v) {
+        if (v == null) return null;
+        if (Array.isArray(v) && v.length >= 3) {
+            return String(v[0]).padStart(4, '0') + '-' + String(v[1]).padStart(2, '0') + '-' + String(v[2]).padStart(2, '0');
+        }
+        return String(v).slice(0, 10);
+    }
+    async openCheckinModal(pid) {
+        const m = document.getElementById('checkinModal');
+        if (!m) return;
+        this._ciPid = pid;
+        document.getElementById('ciText').value = '';
+        document.getElementById('ciMinutes').value = '60';
+        document.getElementById('ciMood').value = '😀';
+        const wrap = document.getElementById('ciTasks');
+        wrap.innerHTML = '<div class="empty small">加载今日任务…</div>';
+        m.hidden = false;
+        const today = this.todayStr();
+        try {
+            const d = await this.api('/plans/' + pid, {});
+            document.getElementById('ciPlanName').textContent = (d && d.plan && d.plan.title) ? d.plan.title : '';
+            const tasks = (d && d.tasks) || [];
+            const isToday = t => t.scheduledDate && this.normDate(t.scheduledDate) === today;
+            let todayTasks = tasks.filter(t => isToday(t) && t.status !== 'DONE');
+            if (!todayTasks.length) {
+                // 今日无排期任务：回退到最近未完成任务（最多 5 条）
+                todayTasks = tasks.filter(t => t.status !== 'DONE').slice(0, 5);
+            }
+            wrap.innerHTML = todayTasks.length
+                ? todayTasks.map(t => `
+                    <label class="ci-task">
+                        <input type="checkbox" class="ci-check" value="${t.id}" checked />
+                        <span class="ci-task-name">${this.escapeHtml(t.title)}</span>
+                        <span class="ci-task-day">${t.scheduledDate ? this.fmtDay(t.scheduledDate) : ''}</span>
+                    </label>`).join('')
+                : '<div class="empty small">今天没有待办任务，可以直接记录学习内容 👍</div>';
+        } catch (e) { wrap.innerHTML = '<div class="empty small err">加载失败：' + this.escapeHtml(e.message) + '</div>'; }
+    }
+    closeCheckinModal() { document.getElementById('checkinModal').hidden = true; this._ciPid = null; }
+    async submitCheckin() {
+        const pid = this._ciPid;
+        if (!pid) { this.closeCheckinModal(); return; }
+        const checks = [...document.querySelectorAll('#ciTasks .ci-check:checked')];
+        const note = document.getElementById('ciText').value.trim();
+        const minutes = Number(document.getElementById('ciMinutes').value) || 0;
+        const mood = document.getElementById('ciMood').value;
+        if (!checks.length && !note) { this.toast('请勾选完成的任务或填写学习内容', 'warning'); return; }
+        try {
+            // 1. 勾选的任务置为 DONE，并把「做了什么」写入 completion_note（后端自动带时间戳）
+            for (const c of checks) {
+                await this.api('/plans/' + pid + '/tasks/' + c.value, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'DONE', note }) });
+            }
+            // 2. 写入打卡记录
+            await this.apiJson('/plans/' + pid + '/checkin', { date: this.todayStr(), doneTaskIdList: checks.map(c => c.value), completedContent: note, durationMinutes: minutes, mood: mood });
+            this.toast('打卡成功 💪', 'success');
+            this.closeCheckinModal();
+            await this.renderPlans();
+        } catch (e) { this.toast('打卡失败：' + this.escapeHtml(e.message), 'error'); }
+    }
+    async dashboard(pid, card) {
+        const extra = card.querySelector('#extra-' + pid);
+        try {
+            const d = await this.api('/plans/' + pid + '/dashboard', {});
+            // 自动重排提示：系统观察执行状态发现停滞，已自动重排剩余任务
+            const autoNote = (d.autoReplanned && d.coachNote)
+                ? `<div class="auto-replan-note">🤖 ${this.escapeHtml(d.coachNote)}</div>` : '';
+            extra.innerHTML = `<div class="extra-card"><h4>进度看板</h4>${autoNote}
+                <div class="kv"><span>完成率</span><b>${d.completionRate ?? 0}%</b></div>
+                <div class="kv"><span>已完成/总任务</span><b>${(d.doneTasks ?? 0)}/${(d.totalTasks ?? 0)}</b></div>
+                <div class="kv"><span>连续打卡</span><b>${d.streak ?? 0} 天</b></div>
+                <div class="status-dist">${(d.statusDistribution || []).map(s => `<span class="badge">${this.escapeHtml(s.status)}: ${s.count}</span>`).join('')}</div>
+                <button class="mini primary" data-checkin="${pid}">今日打卡</button>
+            </div>`;
+            if (d.autoReplanned) this.toast('检测到停滞，已自动重排剩余任务', 'info');
+            extra.querySelector('[data-checkin]').addEventListener('click', () => this.openCheckinModal(pid));
+        } catch (e) { extra.innerHTML = '<div class="extra-card err">' + this.escapeHtml(e.message) + '</div>'; }
+    }
+    async weakness(pid, card) {
+        const extra = card.querySelector('#extra-' + pid);
+        try {
+            const d = await this.api('/plans/' + pid + '/weakness', {});
+            const items = d.weakAreas || [];
+            extra.innerHTML = `<div class="extra-card"><h4>薄弱点热力</h4>${(items.length ? items.map(w => `
+                <div class="weak-row"><span class="weak-name">${this.escapeHtml(w.topic)}</span>
+                <span class="weak-bar"><span style="width:${Math.min(100, (w.weight || 0))}%"></span></span>
+                <span class="weak-w">${w.weight || 0}</span></div>`).join('') : '<div class="empty small">暂无数据，多做测验即可生成</div>')}
+            </div>`;
+        } catch (e) { extra.innerHTML = '<div class="extra-card err">' + this.escapeHtml(e.message) + '</div>'; }
+    }
+
+    /* ---------- 测验 ---------- */
+    async loadQuizPlans() {
+        try {
+            const plans = await this.api('/plans', {});
+            const sel = document.getElementById('quizPlanSelect');
+            sel.innerHTML = '<option value="">— 不绑定计划（仅按主题出） —</option>' +
+                (plans || []).map(p => `<option value="${p.id}">${this.escapeHtml(p.title)}${p.subject ? ' · ' + this.escapeHtml(p.subject) : ''}</option>`).join('');
+            // 绑联动：选 plan 时加载该 plan 的章节到 quizChapterSelect
+            sel.onchange = () => this.loadQuizChapters(sel.value);
+        } catch (e) {}
+    }
+    async loadQuizChapters(planId) {
+        const cs = document.getElementById('quizChapterSelect');
+        const mb = document.getElementById('manageChapterBtn');
+        if (!cs) return;
+        if (!planId) {
+            cs.disabled = true; cs.innerHTML = '<option value="">— 选中计划后可选章节 —</option>';
+            if (mb) mb.disabled = true;
+            return;
+        }
+        if (mb) mb.disabled = false;
+        try {
+            const list = await this.api('/plans/' + planId + '/chapters', {});
+            const opts = ['<option value="">— 不指定章节（按计划全任务出题） —</option>']
+                .concat((list || []).map(c => `<option value="${this.escapeHtml(c)}">${this.escapeHtml(c)}</option>`));
+            cs.disabled = false;
+            cs.innerHTML = opts.join('');
+            // 如果没章节，给提示（但仍允许在「管理章节」里手动添加）
+            if (!list || list.length === 0) {
+                cs.innerHTML = '<option value="">— 该计划暂无章节，可点「管理章节」手动添加 —</option>';
+                cs.disabled = true;
+            }
+        } catch (e) { cs.innerHTML = '<option value="">— 加载章节失败 —</option>'; cs.disabled = true; }
+    }
+    _quizPlanId() { return (document.getElementById('quizPlanSelect').value || '').trim(); }
+    openChapterModal() {
+        const pid = this._quizPlanId();
+        if (!pid) { this.toast('请先在关联计划里选中一个计划', 'warning'); return; }
+        const name = document.getElementById('chapterPlanName');
+        if (name) {
+            const sel = document.getElementById('quizPlanSelect');
+            name.textContent = (sel && sel.selectedOptions && sel.selectedOptions[0]) ? sel.selectedOptions[0].textContent : ('计划 #' + pid);
+        }
+        document.getElementById('chapterModal').hidden = false;
+        this.renderChapterList();
+    }
+    closeChapterModal() { document.getElementById('chapterModal').hidden = true; }
+    async renderChapterList() {
+        const pid = this._quizPlanId();
+        const box = document.getElementById('chapterList');
+        if (!box) return;
+        if (!pid) { box.innerHTML = '<div class="chapter-empty">请先选择计划</div>'; return; }
+        try {
+            const list = await this.api('/plans/' + pid + '/chapters', {});
+            box.innerHTML = (list && list.length)
+                ? list.map(c => `<span class="chapter-chip">${this.escapeHtml(c)} <button class="rm" data-rm="${this.escapeHtml(c)}" title="删除">×</button></span>`).join('')
+                : '<div class="chapter-empty">还没有章节，在下面输入章节名添加，如：二次型</div>';
+            box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => this.removeChapter(b.dataset.rm)));
+        } catch (e) { box.innerHTML = '<div class="chapter-empty">加载失败：' + this.escapeHtml(e.message) + '</div>'; }
+    }
+    async addChapter() {
+        const pid = this._quizPlanId();
+        const inp = document.getElementById('chapterInput');
+        const name = (inp.value || '').trim();
+        if (!pid) { this.toast('请先选择计划', 'warning'); return; }
+        if (!name) { this.toast('请输入章节名', 'warning'); inp.focus(); return; }
+        try {
+            await this.apiJson('/plans/' + pid + '/chapters', { name });
+            inp.value = '';
+            this.toast('已添加章节：' + name, 'success');
+            await this.renderChapterList();
+            await this.loadQuizChapters(pid);
+        } catch (e) { this.toast('添加失败：' + this.escapeHtml(e.message), 'error'); }
+    }
+    async removeChapter(name) {
+        const pid = this._quizPlanId();
+        if (!pid) return;
+        try {
+            await this.api('/plans/' + pid + '/chapters?name=' + encodeURIComponent(name), { method: 'DELETE' });
+            this.toast('已删除章节：' + name, 'info');
+            await this.renderChapterList();
+            await this.loadQuizChapters(pid);
+        } catch (e) { this.toast('删除失败：' + this.escapeHtml(e.message), 'error'); }
+    }
+    async generateQuiz() {
+        const topic = document.getElementById('quizTopic').value.trim();
+        const count = Number(document.getElementById('quizCount').value) || 5;
+        const planId = (document.getElementById('quizPlanSelect').value || '').trim();
+        const chapter = (document.getElementById('quizChapterSelect').value || '').trim();
+        if (!topic && !chapter) { this.toast('请填写主题或选择章节', 'warning'); return; }
+        this.showOverlay(true, '生成测验中…', 'RAG 检索 + LLM 出题，约需 15~40 秒');
+        try {
+            const data = await this.apiJson('/quiz/generate', { topic, count, planId: planId || null, chapter: chapter || null });
+            const qs = (data && data.questions) || [];
+            const useChapter = chapter || (data && data.chapter) || topic;
+            this.renderQuizPaper(qs, planId || null, useChapter);
+            this.toast(qs.length ? ('已生成 ' + qs.length + ' 题' + (chapter ? ' · 章节：' + chapter : '') + (planId ? ' · 按计划' : '')) : '出题失败，已显示原因', qs.length ? 'success' : 'warning', 5000);
+        } catch (e) { this.toast('失败：' + this.escapeHtml(e.message), 'error'); }
+        finally { this.showOverlay(false); }
+    }
+    renderQuizPaper(qs, planId, chapter) {
+        const paper = document.getElementById('quizPaper');
+        if (!qs.length) { paper.innerHTML = '<div class="empty">没有生成题目</div>'; return; }
+        paper.innerHTML = `<div class="paper-head">共 ${qs.length} 题 · <button class="mini primary" id="gradeBtn">交卷批改</button></div>` +
+            qs.map((q, i) => `
+            <div class="q-item glass-card" data-i="${i}">
+                <div class="q-title"><span class="q-no">${i + 1}.</span> ${this.escapeHtml(q.question)} <span class="q-type">${this.escapeHtml(q.type || '')}</span></div>
+                <div class="q-options">${(q.options || []).map((o, j) => `
+                    <label class="opt"><input type="radio" name="q${i}" value="${this.escapeHtml(o)}"><span>${this.escapeHtml(o)}</span></label>`).join('')}</div>
+                <input class="q-answer" type="hidden" value="${this.escapeHtml(q.answer || '')}">
+            </div>`).join('');
+        paper.querySelector('#gradeBtn').addEventListener('click', () => this.gradeQuiz(qs, planId, chapter));
+    }
+    async gradeQuiz(qs, planId, chapter) {
+        const paper = document.getElementById('quizPaper');
+        const answers = qs.map((q, i) => {
+            const sel = paper.querySelector(`input[name="q${i}"]:checked`);
+            return { question: q.question, userAnswer: sel ? sel.value : '', correctAnswer: q.answer, correct: sel ? sel.value === q.answer : false };
+        });
+        const score = answers.filter(a => a.correct).length;
+        this.showOverlay(true, '批改中…');
+        try {
+            const data = await this.apiJson('/quiz/grade', { answers, planId: planId || null, chapter });
+            paper.insertAdjacentHTML('afterbegin', `<div class="score-banner">得分 ${score}/${qs.length} ${(data && data.weakTopics && data.weakTopics.length) ? '· 薄弱：' + data.weakTopics.map(t => this.escapeHtml(t)).join('、') : ''}</div>`);
+            paper.querySelectorAll('.q-item').forEach((el, i) => {
+                const a = answers[i]; el.classList.add(a.correct ? 'correct' : 'wrong');
+                const mark = document.createElement('div'); mark.className = 'q-feedback';
+                mark.innerHTML = a.correct ? '✅ 正确' : `❌ 你的：${this.escapeHtml(a.userAnswer || '未答')} ／ 正确：${this.escapeHtml(a.correctAnswer)}`;
+                el.appendChild(mark);
+            });
+            this.toast('批改完成', 'success');
+        } catch (e) { this.toast('批改失败：' + e.message, 'error'); }
+        finally { this.showOverlay(false); }
+    }
+
+    /* ---------- 画像 / 会话 ---------- */
+    async loadProfile() {
+        try {
+            const p = await this.api('/profile', {}); if (!p) return;
+            document.getElementById('pfName').value = p.name || '';
+            document.getElementById('pfSubjects').value = p.subjects || '';
+            document.getElementById('pfExam').value = p.examDate || '';
+            document.getElementById('pfStyle').value = p.learningStyle || '';
+            document.getElementById('pfGoals').value = p.goals || '';
+        } catch (e) {}
+    }
+    async saveProfile() {
+        const body = {
+            name: document.getElementById('pfName').value, subjects: document.getElementById('pfSubjects').value,
+            examDate: document.getElementById('pfExam').value, learningStyle: document.getElementById('pfStyle').value, goals: document.getElementById('pfGoals').value
+        };
+        try { await this.api('/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); this.toast('画像已保存', 'success'); }
+        catch (e) { this.toast('保存失败：' + e.message, 'error'); }
+    }
+    async loadSessions() {
+        const list = document.getElementById('sessionList');
+        try {
+            const data = await this.api('/memory/sessions', {});
+            const sessions = Array.isArray(data) ? data : ((data && data.sessions) || []);
+            if (!sessions.length) { list.innerHTML = '<div class="empty small">暂无历史会话</div>'; return; }
+            list.innerHTML = sessions.map(s => `<div class="session-item" data-sid="${s.id}" title="点击恢复该会话"><span>${this.escapeHtml(s.title || s.id)}</span><span class="session-agent">${this.escapeHtml(s.agentName || '')}</span></div>`).join('');
+            list.querySelectorAll('.session-item').forEach(it => it.addEventListener('click', () => {
+                const s = sessions.find(x => String(x.id) === String(it.dataset.sid));
+                this.switchSession(s || { id: it.dataset.sid });
+            }));
+        } catch (e) { list.innerHTML = '<div class="empty small">加载失败</div>'; }
+    }
+    /** 切换会话：加载该会话消息 → 渲染到对话区 → 跳到对话视图 */
+    async switchSession(sess) {
+        if (!sess) return;
+        const sid = sess.id;
+        this.sessionId = sid;
+        let messages = [];
+        if (this.demo) {
+            // 演示 / 本地：从 localStorage 历史里找
+            const h = this.chatHistories.find(x => x.id === sid);
+            messages = (h && h.messages) ? h.messages.map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.content })) : [];
+        } else {
+            try {
+                const data = await this.api('/memory/sessions/' + sid, {});
+                messages = Array.isArray(data) ? data : ((data && data.messages) || []);
+            } catch (e) {
+                this.toast('加载会话失败：' + this.escapeHtml(e.message), 'error');
+            }
+        }
+        const box = document.getElementById('chatMessages');
+        box.innerHTML = '';
+        this.currentChatHistory = [];
+        const userMsgs = (messages || []).filter(m => m.role === 'user' || m.role === 'assistant');
+        if (userMsgs.length) {
+            this.welcomeHide();
+            userMsgs.forEach(m => {
+                this.addMsg(m.role, m.content || '');
+                this.currentChatHistory.push({ type: m.role === 'user' ? 'user' : 'assistant', content: m.content || '', ts: '' });
+            });
+        } else {
+            const w = document.getElementById('welcomeCard'); if (w) w.style.display = '';
+        }
+        // 跳到对话视图，并把侧栏胶囊还原为该会话的 Agent（不改动用户当前选择）
+        this.switchView('chat');
+        if (sess.agentName && AGENT_INFO[sess.agentName]) this.setActiveAgent(sess.agentName);
+        this.toast(userMsgs.length ? '已切换到会话：' + (sess.title || sid) : '该会话暂无消息', 'info');
+    }
+
+    /* ---------- 历史（localStorage 缓存） ---------- */
+    loadChatHistories() { try { return JSON.parse(localStorage.getItem('sb_histories') || '[]'); } catch (e) { return []; } }
+    saveChatHistories() { try { localStorage.setItem('sb_histories', JSON.stringify(this.chatHistories)); } catch (e) {} }
+    pushHistory(type, content) {
+        this.currentChatHistory.push({ type, content, ts: new Date().toISOString() });
+        if (this.currentChatHistory.length === 1) this.chatHistories.unshift({ id: this.sessionId, title: content.slice(0, 30), messages: [...this.currentChatHistory] });
+        else { const h = this.chatHistories.find(x => x.id === this.sessionId); if (h) h.messages = [...this.currentChatHistory]; }
+        this.saveChatHistories();
+    }
+    saveCurrentChat() { const h = this.chatHistories.find(x => x.id === this.sessionId); if (h) { h.messages = [...this.currentChatHistory]; this.saveChatHistories(); } }
+    renderHistorySidebar() {}
+    newChat() {
+        if (this.isBusy) { this.toast('请等待当前对话完成', 'warning'); return; }
+        this.sessionId = this.generateSessionId(); this.currentChatHistory = [];
+        document.getElementById('chatMessages').innerHTML = '';
+        const w = document.getElementById('welcomeCard'); if (w) w.style.display = '';
+        this.toast('已开始新对话', 'info');
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     initUserChip();
     window.__app = new StudyBuddyApp();
-    // 首屏显式激活对话视图：.view 默认 display:none，
-    // 不激活会导致 chat 区（含模型胶囊、输入框）整块不可见。
     try {
         window.__app.switchView('chat');
         window.__app.updateModelPill();
         if (typeof window.__app.renderModelMenu === 'function') window.__app.renderModelMenu();
-    } catch (e) {
-        console.warn('[legacy] 首屏初始化异常:', e.message);
-    }
+    } catch (e) { console.warn('[legacy] 首屏初始化异常:', e.message); }
 });
 
 /* ============ 视觉特效：全屏粒子辉光 + 液态悬停 + 点击水波 ============ */

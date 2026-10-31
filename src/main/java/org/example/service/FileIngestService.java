@@ -64,6 +64,10 @@ public class FileIngestService {
     @Autowired
     private PdfOcrService pdfOcrService;
 
+    /** 原文件落盘（可回溯/可重解析） */
+    @Autowired
+    private UploadStorageService uploadStorageService;
+
     @Autowired
     private TextExtractor textExtractor;
     @Autowired
@@ -87,6 +91,8 @@ public class FileIngestService {
     public IngestResult ingest(MultipartFile file, String subPath) {
         IngestResult result = new IngestResult();
 
+        // 原文件相对路径（catch 里清理孤儿文件用）
+        String storedPath = null;
         try {
             String original = file.getOriginalFilename();
             if (original == null || original.isEmpty()) {
@@ -108,6 +114,9 @@ public class FileIngestService {
                 result.message = "你的知识库里已有相同内容的文件，已跳过（未消耗嵌入配额）";
                 return result;
             }
+
+            // 1.5 原文件落盘（失败不阻断主流程）
+            storedPath = uploadStorageService.save(data, original, sha);
 
             // 2. 抽取文本
             TextExtractor.ExtractResult er = textExtractor.extract(data, original);
@@ -182,12 +191,13 @@ public class FileIngestService {
             }
 
             // 6. 落库记录
-            recordFile(original, repoPath, sha, total, file.getSize(), er.partial ? "PARTIAL" : "READY");
+            recordFile(original, repoPath, sha, total, file.getSize(), er.partial ? "PARTIAL" : "READY", storedPath);
 
             result.fileName = original;
             result.repoPath = repoPath;
             result.chunks = total;
             result.fileSha = sha;
+            result.storedPath = storedPath;
             result.status = er.partial ? "PARTIAL" : "READY";
             result.partial = er.partial;
             result.message = (milvusClient == null ? "（Milvus 降级：未写入向量库）" : "")
@@ -197,6 +207,12 @@ public class FileIngestService {
 
         } catch (Exception e) {
             logger.error("文件摄取失败: {}", e.getMessage(), e);
+            // 摄取失败时清理刚落盘的原文件，避免磁盘残留孤儿文件
+            // （用户看到的是一次失败，磁盘上不该留下他无法管理的垃圾）
+            if (storedPath != null) {
+                uploadStorageService.delete(storedPath);
+                logger.info("已清理失败摄取留下的原文件: {}", storedPath);
+            }
             result.status = "FAILED";
             result.message = e.getMessage();
             return result;
@@ -245,7 +261,8 @@ public class FileIngestService {
                 logger.warn("读回校验未通过：保留旧版本向量: {}", repoPath);
             }
         }
-        recordFile(original, repoPath, sha, total, (long) data.length, er.partial ? "PARTIAL" : "READY");
+        // 重摄取路径不改动 stored_path（传 null，SQL 里会写回 null 保持原值语义一致）
+        recordFile(original, repoPath, sha, total, (long) data.length, er.partial ? "PARTIAL" : "READY", null);
     }
 
     /** 写入单个分片，返回服务端确认的条数（用于「先写后删」的完整性校验） */
@@ -531,16 +548,61 @@ public class FileIngestService {
     /** 删除知识库文件：删 Milvus 向量 + 删 SQLite 记录。返回是否找到并删除。 */
     public boolean deleteFile(Long id) {
         // 归属校验（R4）：只能删除当前用户可见的文件记录
-        String repoPath = jdbc.query(
-                "SELECT repo_path FROM knowledge_files WHERE id=? AND " + OwnerSupport.visibleScope("user_id"),
-                (rs, rowNum) -> rs.getString("repo_path"), id)
-                .stream().findFirst().orElse(null);
+        String repoPath = jdbc.queryForList(
+                        "SELECT repo_path FROM knowledge_files WHERE id=? AND " + OwnerSupport.visibleScope("user_id"),
+                        String.class, id)
+                .stream().filter(java.util.Objects::nonNull).findFirst().orElse(null);
         if (repoPath == null) return false;
+        // 原文件相对路径（删除后用于清理磁盘）
+        // 注意：历史数据的 stored_path 是 NULL，用 Stream.findFirst() 会触发
+        // Optional.of(null) 的 NPE（踩过的坑），这里用 queryForList + 空值过滤。
+        String storedPath = jdbc.queryForList(
+                        "SELECT stored_path FROM knowledge_files WHERE id=?", String.class, id)
+                .stream().filter(java.util.Objects::nonNull).findFirst().orElse(null);
         deleteVectorsOf(repoPath, safeSource(repoPath));
         // 删除侧读回：确认该 source 下确实查不到分片（仍可见只告警，删除无法回滚）
         verifyNoRowsBySource(safeSource(repoPath), "删文件");
         jdbc.update("DELETE FROM knowledge_files WHERE id=?", id);
+        // 清理落盘的原文件（失败仅告警，不影响删除结果）
+        uploadStorageService.delete(storedPath);
         return true;
+    }
+
+    /** 列出当前用户可见的所有文件 id（批量删除用） */
+    public List<Long> listIdsForCurrentUser() {
+        return jdbc.queryForList(
+                "SELECT id FROM knowledge_files WHERE " + OwnerSupport.visibleScope("user_id"),
+                Long.class);
+    }
+
+    /**
+     * 一键清空当前用户的知识库。
+     *
+     * <p>为什么放后端做：前端循环删 N 次会产生 N 次 HTTP + N 次 Milvus 往返，
+     * 文件多时几秒到几十秒；这里一次调用完成，并返回真实删除数，
+     * 部分失败也只影响该文件，不中断整体。</p>
+     *
+     * @return 实际删除的文件数
+     */
+    public int deleteAllForCurrentUser() {
+        List<Long> ids = listIdsForCurrentUser();
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        int deleted = 0;
+        int failed = 0;
+        for (Long id : ids) {
+            try {
+                if (deleteFile(id)) {
+                    deleted++;
+                }
+            } catch (Exception e) {
+                failed++;
+                logger.warn("批量删除失败 id={}: {}", id, e.getMessage());
+            }
+        }
+        logger.info("一键清空知识库：共 {} 个，成功 {}，失败 {}", ids.size(), deleted, failed);
+        return deleted;
     }
 
     private void deleteBySource(String source) {
@@ -574,21 +636,20 @@ public class FileIngestService {
     }
 
     private void recordFile(String fileName, String repoPath, String sha, int chunks,
-                            long size, String status) {
+                            long size, String status, String storedPath) {
         String now = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-        Integer existing = jdbc.query(
-                "SELECT id FROM knowledge_files WHERE repo_path=?",
-                (rs, rowNum) -> rs.getInt("id"), repoPath)
-                .stream().findFirst().orElse(null);
+        Integer existing = jdbc.queryForList(
+                        "SELECT id FROM knowledge_files WHERE repo_path=?", Integer.class, repoPath)
+                .stream().filter(java.util.Objects::nonNull).findFirst().orElse(null);
         if (existing != null) {
-            jdbc.update("UPDATE knowledge_files SET file_sha=?, chunks=?, size_bytes=?, status=?, updated_at=? "
+            jdbc.update("UPDATE knowledge_files SET file_sha=?, chunks=?, size_bytes=?, status=?, updated_at=?, stored_path=? "
                             + "WHERE repo_path=? AND " + OwnerSupport.visibleScope("user_id"),
-                    sha, chunks, size, status, now, repoPath);
+                    sha, chunks, size, status, now, storedPath, repoPath);
         } else {
-            jdbc.update("INSERT INTO knowledge_files(file_name, repo, repo_path, file_sha, chunks, size_bytes, status, created_at, updated_at, user_id) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            jdbc.update("INSERT INTO knowledge_files(file_name, repo, repo_path, file_sha, chunks, size_bytes, status, created_at, updated_at, user_id, stored_path) " +
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     fileName, "", repoPath, sha, chunks, size, status, now, now,
-                    OwnerSupport.currentUserId());
+                    OwnerSupport.currentUserId(), storedPath);
         }
     }
 
@@ -680,6 +741,8 @@ public class FileIngestService {
         public String status;
         public boolean partial;
         public String message;
+        /** 原文件落盘的相对路径（相对 app.data-dir）；落盘失败为 null */
+        public String storedPath;
     }
 
 

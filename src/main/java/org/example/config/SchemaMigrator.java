@@ -36,6 +36,8 @@ public class SchemaMigrator implements CommandLineRunner {
             new String[] { "study_plan", "auto_replan_count", "INTEGER DEFAULT 0" },
             new String[] { "plan_task", "chapter", "TEXT" },
             // ===== 多用户隔离（R1）：8 张业务表统一加 user_id，旧行归 0（SYSTEM）=====
+            // ===== 原文件落盘（可回溯/可重解析）=====
+            new String[] { "knowledge_files", "stored_path", "TEXT" },
             new String[] { "study_plan", "user_id", "INTEGER DEFAULT 0" },
             new String[] { "plan_task", "user_id", "INTEGER DEFAULT 0" },
             new String[] { "daily_checkin", "user_id", "INTEGER DEFAULT 0" },

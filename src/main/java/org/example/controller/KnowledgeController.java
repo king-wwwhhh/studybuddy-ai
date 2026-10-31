@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.web.bind.annotation.*;
+import java.util.Map;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.sql.ResultSet;
@@ -29,6 +30,10 @@ public class KnowledgeController {
     private FileIngestService fileIngestService;
     @Autowired
     private JdbcTemplate jdbc;
+
+    /** 孤儿向量清理（Milvus 有、数据库已无记录的残留分片） */
+    @Autowired
+    private org.example.service.OrphanVectorCleaner orphanVectorCleaner;
 
     /** 上传文件：推送私有仓库（真源）+ 抽取 + 向量化 */
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
@@ -51,6 +56,69 @@ public class KnowledgeController {
     }
 
     /** 删除知识库文件：删 Milvus 向量 + SQLite 记录 */
+    /** 一键清空当前用户的知识库（只删自己的，不影响他人） */
+    @DeleteMapping("/all")
+    public ResponseEntity<ApiResponse<Integer>> deleteAll() {
+        try {
+            int n = fileIngestService.deleteAllForCurrentUser();
+            return ResponseEntity.ok(ApiResponse.success(n));
+        } catch (Exception e) {
+            logger.error("清空知识库异常", e);
+            return ResponseEntity.ok(ApiResponse.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 清理孤儿向量（Milvus 里有、数据库里已无记录）。
+     * dryRun=true 只统计不删，便于先看清影响面。
+     */
+    @PostMapping("/cleanup-orphans")
+    public ResponseEntity<ApiResponse<java.util.List<String>>> cleanupOrphans(
+            @RequestParam(value = "dryRun", defaultValue = "true") boolean dryRun,
+            @RequestParam(value = "sources", required = false) java.util.List<String> sources) {
+        try {
+            java.util.List<String> target = (sources == null || sources.isEmpty())
+                    ? new java.util.ArrayList<>() : sources;
+            return ResponseEntity.ok(ApiResponse.success(
+                    orphanVectorCleaner.cleanCandidates(target, dryRun)));
+        } catch (Exception e) {
+            logger.error("孤儿向量清理异常", e);
+            return ResponseEntity.ok(ApiResponse.error(e.getMessage()));
+        }
+    }
+
+    /** 全量扫描 + 清理孤儿向量（Milvus 有、数据库无的所有 source） */
+    @PostMapping("/cleanup-all-orphans")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> cleanupAllOrphans(
+            @RequestParam(value = "dryRun", defaultValue = "true") boolean dryRun) {
+        try {
+            java.util.Map<String, Integer> all = orphanVectorCleaner.scanAllSources();
+            java.util.Set<String> alive = orphanVectorCleaner.aliveSources();
+            java.util.Map<String, Integer> orphans = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, Integer> e : all.entrySet()) {
+                String src = e.getKey();
+                String base = src.startsWith("uploads/") ? src.substring("uploads/".length()) : src;
+                if (!alive.contains(src) && !alive.contains(base)) {
+                    orphans.put(src, e.getValue());
+                }
+            }
+            java.util.List<String> removed = new java.util.ArrayList<>();
+            if (!dryRun) {
+                removed = orphanVectorCleaner.cleanCandidates(orphans.keySet(), false);
+            }
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("totalSources", all.size());
+            out.put("orphanSources", orphans);
+            out.put("reclaimedChunks", orphans.values().stream().mapToInt(Integer::intValue).sum());
+            out.put("removed", removed);
+            out.put("dryRun", dryRun);
+            return ResponseEntity.ok(ApiResponse.success(out));
+        } catch (Exception e) {
+            logger.error("全量孤儿清理异常", e);
+            return ResponseEntity.ok(ApiResponse.error(e.getMessage()));
+        }
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Boolean>> delete(@PathVariable Long id) {
         try {

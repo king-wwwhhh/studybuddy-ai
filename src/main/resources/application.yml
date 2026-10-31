@@ -160,11 +160,22 @@ rag:
   # bounded retries for read-back verification (0/200/400ms)
   verify-attempts: 3
   verify-retry-base-ms: 200
-  # L2^2 threshold (normalized vectors: L2^2 = 2 - 2cos; 1.2 <=> cos~0.4)
-  score-threshold: 1.2
+  # L2^2 threshold (normalized vectors: L2^2 = 2 - 2cos)
+  # ⚠️ 标定记录：修好 embedding 的 input_type（query/document 分离）后，
+  #   相关分片的 L2² 实测落在 0.70~0.85（cos≈0.57~0.65），
+  #   旧的 1.2（cos≈0.4）会把这些全过滤掉，表现为"知识库有却检索不到"。
+  #   现设为 1.0（cos≈0.5）：放行语义相关，挡住明显无关。
+  #   调参依据：RagEvalCli 离线评测 + 日志里的「检索候选 score 区间」。
+  score-threshold: ${RAG_SCORE_THRESHOLD:1.0}
   # blank = follow auto-detected model catalog
   model: "${RAG_MODEL:}"
 
+  # 外部模型（自定义 baseUrl）的 RAG 支持：后端预检索后注入提示词
+  # 外部模型常不支持 function calling，因此不注入工具，改用 stuff 模式把资料拼进 system prompt
+  external:
+    enabled: ${RAG_EXTERNAL_ENABLED:true}
+    top-k: ${RAG_EXTERNAL_TOP_K:5}
+    max-chars: ${RAG_EXTERNAL_MAX_CHARS:4000}
 # conversation memory: recallHistory tool lets the model re-read older turns from SQLite
 memory:
   recall:

@@ -34,6 +34,10 @@ public class ChatService {
 
     private static final Logger logger = LoggerFactory.getLogger(ChatService.class);
 
+    /** 外部模型的 RAG 支持：后端预检索后注入提示词（不依赖模型 function calling） */
+    @Autowired
+    private ExternalRagPackager externalRagPackager;
+
     @Autowired
     private InternalDocsTools internalDocsTools;
 
@@ -173,8 +177,38 @@ public class ChatService {
         String system = buildAgentSystemPrompt(agent, history, sessionId);
         boolean external = isExternalModel(model);
         if (external) {
-            system = system + "\n\n[环境提示] 当前会话选用的是外部 API，仅支持普通对话，" +
-                    "不会执行知识库检索、计划、打卡等工具调用。请基于模型自身能力作答。";
+            // 外部模型不注入工具（兼容性考虑：很多兼容模型不支持 function calling），
+            // 但 RAG 不能丢 —— 改由后端预检索后把资料拼进提示词（stuff 模式）。
+            String kbContext = null;
+            try {
+                String lastUserMsg = lastUserMessage(history);
+                kbContext = externalRagPackager.buildContext(lastUserMsg);
+            } catch (Exception e) {
+                logger.warn("外部模型预检索异常，降级为纯对话: {}", e.getMessage());
+            }
+            if (kbContext != null && !kbContext.isBlank()) {
+                system = system + "\n\n以下是从用户知识库检索到的资料，请优先依据这些内容回答；" +
+                        "资料未覆盖的部分再用你自己的知识补充，并明确说明哪部分来自资料、哪部分来自通用知识。\n\n"
+                        + kbContext;
+            } else {
+                system = system + "\n\n[环境提示] 当前未检索到相关参考资料，请基于模型自身能力作答，" +
+                        "并说明这是通用知识而非来自用户的知识库。";
+            }
+        }
+        // 外部模型：不注入工具，但用预检索把知识库内容拼进提示词（RAG 不能丢）
+        if (external) {
+            try {
+                String kbContext = externalRagPackager.buildContext(question);
+                if (kbContext != null && !kbContext.isBlank()) {
+                    system = system + "\n\n以下是从用户知识库检索到的资料，请优先依据这些内容回答；" +
+                            "资料未覆盖的部分再用你自己的知识补充。\n\n" + kbContext;
+                } else {
+                    system = system + "\n\n[环境提示] 未检索到相关参考资料，请基于模型自身能力作答，" +
+                            "并说明这是通用知识而非来自用户的知识库。";
+                }
+            } catch (Exception e) {
+                logger.warn("外部模型预检索异常，降级为纯对话: {}", e.getMessage());
+            }
         }
         ChatModel chatModel = chatModelFactory.createAny(model, agent.getTemperature(), 8192, 0.9);
         Builder b = ReactAgent.builder()
@@ -225,6 +259,7 @@ public class ChatService {
             b.methodTools(methodToolsFor(agent))
                     .tools(getToolCallbacks());
         }
+        // 外部模型：工具不注入（避免兼容性问题），但知识库内容已通过 system prompt 注入
         return b.build();
     }
 
@@ -234,6 +269,24 @@ public class ChatService {
         Object[] merged = java.util.Arrays.copyOf(base, base.length + 1);
         merged[base.length] = historyRecallTool;
         return merged;
+    }
+
+    /** 取历史里最后一条用户消息（外部模型预检索的查询词） */
+    private static String lastUserMessage(List<Map<String, String>> history) {
+        if (history == null || history.isEmpty()) {
+            return null;
+        }
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Map<String, String> m = history.get(i);
+            if (m == null) {
+                continue;
+            }
+            String role = m.get("role");
+            if (role != null && "user".equalsIgnoreCase(role.trim())) {
+                return m.get("content");
+            }
+        }
+        return null;
     }
 
     private static boolean isExternalModel(String model) {
@@ -253,6 +306,20 @@ public class ChatService {
      */
     public String buildAgentSystemPrompt(Agent agent, List<Map<String, String>> history, String sessionId) {
         StringBuilder sb = new StringBuilder(agent.getSystemPrompt());
+
+        // 知识库优先指令（踩过的坑：只给工具不写指令时，模型会把「求职意向是什么」
+        // 当成通用概念问题，直接用自己的知识作答而不去检索，
+        // 表现为「文件明明在知识库里，却答非所问/说没找到」）。
+        // 这里明确要求：凡涉及具体资料/文件/课程/笔记/简历的内容，先检索再回答。
+        sb.append("\n\n【知识库使用规则（必须遵守）】\n")
+                .append("1. 当问题涉及「具体的资料/文件/课程/笔记/讲义/论文/简历/项目」以及它们的细节时，")
+                .append("**必须先调用知识库检索工具**，再依据检索结果作答，不要直接凭通用知识回答。\n")
+                .append("2. 用户在提问里点到了某个文件名（如《xxx.pdf》）时，也要先检索该文件内容，")
+                .append("而不是只凭文件名推测。\n")
+                .append("3. 检索结果为空的，如实说明「知识库中没有找到相关内容」，")
+                .append("再明确区分下面要补充的是**通用知识**而非来自用户资料，绝不假装资料里写过。\n")
+                .append("4. 依据检索结果回答时，尽量指出出自哪份资料/哪一章，便于用户核对。");
+
         String routeHint = ROUTE_HINT.get();
         if (routeHint != null) {
             sb.append("\n\n").append(routeHint);

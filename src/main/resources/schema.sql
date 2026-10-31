@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS knowledge_files (
     size_bytes  INTEGER,
     status      TEXT    NOT NULL DEFAULT 'READY',
     created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL
+    updated_at  TEXT    NOT NULL,
+    stored_path TEXT
 );
 
 -- ============ 认证与权限 ============

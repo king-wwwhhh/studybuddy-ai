@@ -3,6 +3,7 @@ package org.example.agent.tool;
 import org.example.util.Mappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.service.ChapterAggregator;
+import org.example.service.QueryExpansionService;
 import org.example.service.VectorSearchService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,9 +31,14 @@ public class KnowledgeSearchTool {
     @Value("${rag.top-k:10}")
     private int topK;
 
+    /** 查询扩展：把短问题补全到能匹配具体资料（详见 QueryExpansionService 的注释） */
+    private final QueryExpansionService queryExpansion;
+
     @Autowired
-    public KnowledgeSearchTool(VectorSearchService vectorSearchService) {
+    public KnowledgeSearchTool(VectorSearchService vectorSearchService,
+                               QueryExpansionService queryExpansion) {
         this.vectorSearchService = vectorSearchService;
+        this.queryExpansion = queryExpansion;
     }
 
     @Tool(description = "Search the personal knowledge base (uploaded notes, textbooks, past papers) for relevant passages to answer study questions. "
@@ -41,8 +47,16 @@ public class KnowledgeSearchTool {
     public String knowledgeSearch(
             @ToolParam(description = "Search query describing what you want to find") String query) {
         try {
+            // 短查询（如「求职意向是什么」）语义太泛，直接检索常常 score 超阈值导致召回 0 条。
+            // 先补上「知识库文件名 + 上一轮提问」，把泛称锚定到具体文档。
+            String expanded = queryExpansion.expand(query, null);
             List<VectorSearchService.SearchResult> results =
-                    vectorSearchService.searchSimilarDocuments(query, topK);
+                    vectorSearchService.searchWithKeywordFallback(expanded, topK);
+            if (results.isEmpty() && !expanded.equals(query)) {
+                // 扩展后仍无结果，回退到原始查询再试一次（避免扩展词反而稀释语义）
+                logger.info("扩展检索无结果，回退原始查询: {}", query);
+                results = vectorSearchService.searchWithKeywordFallback(query, topK);
+            }
             if (results.isEmpty()) {
                 return "{\"status\":\"no_results\",\"message\":\"知识库暂无相关内容，建议先上传资料。\"}";
             }

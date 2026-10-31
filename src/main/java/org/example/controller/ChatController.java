@@ -151,6 +151,8 @@ public class ChatController {
      */
     @PostMapping(value = "/chat_stream", produces = "text/event-stream;charset=UTF-8")
     public SseEmitter chatStream(@RequestBody ChatRequest request) {
+        // 登记请求用户：工具调用可能异步执行，靠 VectorScope 的显式登记保证检索条件正确
+        org.example.service.VectorScope.setRequestUser(org.example.auth.OwnerSupport.currentUserId());
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
         // 参数校验

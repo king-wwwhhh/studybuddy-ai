@@ -108,6 +108,8 @@ public class VectorEmbeddingService {
             TextEmbeddingParam param = TextEmbeddingParam
                     .builder()
                     .model(model)
+                    // document 模式：入库的文档片段必须用 document 类型
+                    .textType(TextEmbeddingParam.TextType.DOCUMENT)
                     .texts(Collections.singletonList(content))
                     .build();
 
@@ -177,9 +179,13 @@ public class VectorEmbeddingService {
             }
 
             // 构建请求参数 - 批量输入
+            // ⚠️ 必须显式声明 document 类型：摄取走的是这条批量路径，
+            //    漏掉它会让文档向量与查询向量不在同一子空间（实测 score 偏高 ~0.5，
+            //    被 score-threshold 全量过滤，表现为"知识库有却检索不到"）。
             TextEmbeddingParam param = TextEmbeddingParam
                     .builder()
                     .model(model)
+                    .textType(TextEmbeddingParam.TextType.DOCUMENT)
                     .texts(contents)
                     .build();
 
@@ -229,8 +235,38 @@ public class VectorEmbeddingService {
      * @param query 查询文本
      * @return 向量嵌入
      */
+    /**
+     * 生成**查询**向量。
+     *
+     * <p>踩过的坑：原实现直接复用 `generateEmbedding`（document 模式），
+     * 而 DashScope text-embedding-v4 是**非对称**模型 —— 查询和文档要用不同 input_type。
+     * 混用的后果是相似度系统性偏低（实测精确关键词也只能到 cos≈0.3，
+     * 被 score-threshold 全量过滤，表现为「知识库明明有却检索不到」）。</p>
+     */
     public List<Float> generateQueryVector(String query) {
-        return generateEmbedding(query);
+        if (query == null || query.trim().isEmpty()) {
+            throw new IllegalArgumentException("查询内容不能为空");
+        }
+        try {
+            if (Constants.apiKey == null || Constants.apiKey.isEmpty()) {
+                Constants.apiKey = apiKey;
+            }
+            TextEmbeddingParam param = TextEmbeddingParam
+                    .builder()
+                    .model(model)
+                    .textType(TextEmbeddingParam.TextType.QUERY)
+                    .texts(Collections.singletonList(query))
+                    .build();
+            TextEmbeddingResult result = textEmbedding.call(param);
+            List<Float> vec = getFloats(result);
+            logger.info("成功生成查询向量, 长度 {} 字符, 维度 {}", query.length(), vec.size());
+            return vec;
+        } catch (NoApiKeyException e) {
+            throw new RuntimeException("API Key 未设置，请配置 dashscope.api.key", e);
+        } catch (Exception e) {
+            logger.error("生成查询向量失败: {}", e.getMessage(), e);
+            throw new RuntimeException("生成查询向量失败: " + e.getMessage(), e);
+        }
     }
 
     /**
