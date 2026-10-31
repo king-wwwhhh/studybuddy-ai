@@ -47,6 +47,7 @@ public class FileIngestService {
     /** Milvus content 字段 VARCHAR(8192) 按字节计；兜底截断到安全字节数，防止意外超限插入失败 */
     private static final int CONTENT_MAX_BYTES = 8000;
 
+
     /** 旧实现的 source 规范化规则（非 ASCII 全替换成 `_`）；仅用于删除时兼容存量向量 */
     private static final Pattern LEGACY_UNSAFE_SOURCE = Pattern.compile("[^A-Za-z0-9._/-]");
 
@@ -100,7 +101,7 @@ public class FileIngestService {
                 result.fileSha = sha;
                 result.status = "EXISTS";
                 result.partial = false;
-                result.message = "文件内容已存在，跳过重复摄取（未消耗嵌入配额）";
+                result.message = "你的知识库里已有相同内容的文件，已跳过（未消耗嵌入配额）";
                 return result;
             }
 
@@ -108,6 +109,10 @@ public class FileIngestService {
             TextExtractor.ExtractResult er = textExtractor.extract(data, original);
             if (er.text == null || er.text.isBlank()) {
                 throw new RuntimeException("文本抽取为空（文件可能是扫描版图片/加密 PDF，暂不支持）");
+            }
+            // 2.1 有效正文校验：只有标题/封面时不能当作可用资料入库
+            if (!TextQuality.usable(er.text)) {
+                throw new RuntimeException(TextQuality.rejectionMessage(er.text));
             }
 
             // 3. 旧版本信息（写完之后用它精确清理）；注意：不再「先删旧向量」
@@ -186,6 +191,10 @@ public class FileIngestService {
         String original = Paths.get(repoPath).getFileName().toString();
         TextExtractor.ExtractResult er = textExtractor.extract(data, original);
         if (er.text == null || er.text.isBlank()) return;
+        if (!TextQuality.usable(er.text)) {
+            logger.warn("跳过重摄取：{} 有效正文过少（{} 字符）", original, TextQuality.usefulChars(er.text));
+            return;
+        }
         String safeSource = safeSource(repoPath);
         Previous previous = queryPrevious(repoPath);
         List<DocumentChunk> chunks = chunkService.chunkDocument(er.text, repoPath);
@@ -574,12 +583,18 @@ public class FileIngestService {
         }
     }
 
-    /** 同内容文件（按内容 sha）是否已在知识库中（任意状态） */
+    /**
+     * 同内容文件是否**已在当前用户的知识库中**（按内容 sha 判重）。
+     *
+     * <p>踩过的坑：原先只按 sha 全局判重，导致 A 传过某文件后，B 再传同一文件会被
+     * 判为"已存在"而跳过 —— B 的知识库里什么都没有，但接口返回成功，极难排查。</p>
+     */
     private boolean alreadyIngested(String sha) {
         if (sha == null || sha.isEmpty()) return false;
         try {
             Integer count = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM knowledge_files WHERE file_sha=?", Integer.class, sha);
+                    "SELECT COUNT(*) FROM knowledge_files WHERE file_sha=? AND "
+                            + OwnerSupport.visibleScope("user_id"), Integer.class, sha);
             return count != null && count > 0;
         } catch (Exception e) {
             logger.warn("查询已摄取文件失败: {}", e.getMessage());
