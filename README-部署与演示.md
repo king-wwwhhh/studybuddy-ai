@@ -106,6 +106,9 @@ curl http://localhost:9900/api/health
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | AI 对话显示「大模型鉴权失败」 | 未配置 `DASHSCOPE_API_KEY` | 配置后重启 |
+| 日志出现 `url error, please check url` | 该模型在此端点不可用（实测 `qwen3.5-flash` 会报） | 启动日志会列出「可用=[...]」，换用其中的模型；`chat.model` 留空则自动选 |
+| `/api/milvus/health` 404 | 该端点实际路径是 `/milvus/health`（无 `/api` 前缀） | 用 `curl http://localhost:9900/milvus/health` |
+| 上传成功但 `status: READY` 且 message 含「Milvus 降级」 | Milvus 未启动，降级模式只做解析不写向量 | 启动 Milvus 后重新上传，或接受降级（其余功能正常） |
 | 收不到验证码 | 未配 SMTP | 从 `target/app.log` 搜 `code=` |
 | 重启后登录态失效 | 未配 `AUTH_JWT_SECRET`（用了随机密钥） | 配置固定密钥 |
 | 知识库上传后检索不到 | Milvus 未启动 → 降级模式 | 启动 `docker compose -f vector-database.yml up -d` |
@@ -113,7 +116,23 @@ curl http://localhost:9900/api/health
 
 ---
 
-## 七、测试与验收
+## 七、实测验证记录（2026-10-31，本机）
+
+| 项目 | 结果 |
+|---|---|
+| 服务启动 | `Tomcat started on port 9900`，`/api/health` → `{"status":"UP","db":"UP"}` |
+| 模型探测 | 配 `DASHSCOPE_API_KEY` 后：`可用=[qwen3.7-max, qwen-max, qwen-plus, qwen-plus-latest, qwen-flash]` |
+| 非流式对话 | `POST /api/chat` → 成功，Agent=`chat`，耗时 **7s** |
+| **流式对话** | `POST /api/chat_stream` → **18 个 content 增量块 + 1 个 done**，耗时 4.6s，回答 98 字 |
+| 前端聊天页 | Playwright 验证：回复渲染 + **「通用学伴」Agent 徽标** + 会话列表，0 控制台错误 |
+| 文档上传 | `POST /api/knowledge/upload` → 解析出 **2 个分片**，状态 READY |
+| Milvus | **未启动**（`/milvus/health` → 503 DEGRADED），向量写入自动降级，上传仍成功 |
+| 后端测试 | 143 例全绿 |
+| E2E 回归 | 23 条断言全通过 |
+
+> 注：本机未启动 Milvus，所以 RAG 检索链路未做端到端验证；配好 Milvus 后可用同一份文档验证"上传→检索→带出处回答"。
+
+## 八、测试与验收
 
 ```bash
 # 后端单元 + 集成测试（143 例）
@@ -125,7 +144,7 @@ node scripts/e2e.mjs        # 需后端运行中
 
 ---
 
-## 八、目录结构
+## 九、目录结构
 
 ```
 workbuddy魔改/
