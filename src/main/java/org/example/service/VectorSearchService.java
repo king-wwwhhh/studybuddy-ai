@@ -99,6 +99,8 @@ public class VectorSearchService {
                     .withTopK(topK)
                     .withMetricType(io.milvus.param.MetricType.L2)
                     .withOutFields(List.of("id", "content", "metadata"))
+                    // 多用户隔离（R5）：只检索"本人 + 系统公共 + 旧数据"的向量，防止跨用户泄露
+                    .withExpr(VectorScope.searchExprForCurrentUser())
                     // 检索参数必须与 collection 实际索引类型匹配：IVF 传 nprobe、HNSW 传 ef、FLAT 不传
                     .withParams(IndexPlanner.buildSearchParams(
                             milvusClientFactory.getIndexType(), nprobe, ef, topK))

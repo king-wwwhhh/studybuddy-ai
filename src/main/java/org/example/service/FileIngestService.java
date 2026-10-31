@@ -13,6 +13,7 @@ import io.milvus.param.RpcStatus;
 import io.milvus.param.collection.LoadCollectionParam;
 import io.milvus.param.dml.DeleteParam;
 import io.milvus.param.dml.InsertParam;
+import org.example.auth.OwnerSupport;
 import org.example.client.MilvusClientFactory;
 import org.example.constant.MilvusConstants;
 import org.example.dto.DocumentChunk;
@@ -133,6 +134,7 @@ public class FileIngestService {
             int total = chunks.size();
             if (milvusClient != null) {
                 List<Long> insertCounts = new ArrayList<>();
+                long ownerId = OwnerSupport.currentUserId();
                 for (int start = 0; start < total; start += EMBED_BATCH) {
                     int end = Math.min(total, start + EMBED_BATCH);
                     List<DocumentChunk> batch = chunks.subList(start, end);
@@ -142,7 +144,7 @@ public class FileIngestService {
                     List<List<Float>> vectors = embeddingService.generateEmbeddings(texts);
                     for (int i = 0; i < batch.size(); i++) {
                         insertCounts.add(insertChunk(batch.get(i), vectors.get(i), safeSource, original,
-                                extension(original), sha, repoUrl, total));
+                                extension(original), sha, repoUrl, total, ownerId));
                     }
                     logger.info("已向量化分片 {}/{} : {}", Math.min(end, total), total, repoPath);
                 }
@@ -232,6 +234,7 @@ public class FileIngestService {
         int total = chunks.size();
         if (milvusClient != null) {
             List<Long> insertCounts = new ArrayList<>();
+            long ownerId = OwnerSupport.currentUserId();
             for (int start = 0; start < total; start += EMBED_BATCH) {
                 int end = Math.min(total, start + EMBED_BATCH);
                 List<DocumentChunk> batch = chunks.subList(start, end);
@@ -240,7 +243,7 @@ public class FileIngestService {
                 List<List<Float>> vectors = embeddingService.generateEmbeddings(texts);
                 for (int i = 0; i < batch.size(); i++) {
                     insertCounts.add(insertChunk(batch.get(i), vectors.get(i), safeSource, original,
-                            extension(original), sha, repoUrl, total));
+                            extension(original), sha, repoUrl, total, ownerId));
                 }
             }
             // 先写后删：写入不完整就保留旧向量（同步路径失败会让整个 sync 记一次失败，但数据不丢）
@@ -262,7 +265,8 @@ public class FileIngestService {
 
     /** 写入单个分片，返回服务端确认的条数（用于「先写后删」的完整性校验） */
     private long insertChunk(DocumentChunk chunk, List<Float> vector, String source,
-                             String fileName, String sourceType, String sha, String repo, int total) {
+                             String fileName, String sourceType, String sha, String repo, int total,
+                             long ownerId) {
         loadCollection();
         // 主键带内容版本：内容变了就是一批新主键，新旧可共存，写成功后再定点清理旧主键
         String id = VectorWritePlan.chunkId(source, sha, chunk.getChunkIndex());
@@ -281,6 +285,8 @@ public class FileIngestService {
         if (chunk.getHeadingPath() != null && !chunk.getHeadingPath().isBlank()) {
             metadata.put("heading_path", chunk.getHeadingPath()); // 章节路径：检索命中后可说明「出自哪一章」
         }
+        // 多用户隔离（R5）：向量必须带归属，否则任何用户都能检索到别人上传的资料
+        metadata.put(VectorScope.USER_FIELD, ownerId);
         JsonObject metaJson = GSON.toJsonTree(metadata).getAsJsonObject();
 
         List<InsertParam.Field> fields = new ArrayList<>();
