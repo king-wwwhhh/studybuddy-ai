@@ -94,6 +94,7 @@ function renderCharts() {
   if (trendRef.value) {
     trendChart = trendChart || echarts.init(trendRef.value)
     trendChart.setOption({
+      grid: { left: 40, right: 20, top: 40, bottom: 30 },
       tooltip: { trigger: 'axis' },
       legend: { data: ['消息数', '新增用户', '打卡数'] },
       xAxis: { type: 'category', data: trend.value.map(r => r.date) },
@@ -107,11 +108,18 @@ function renderCharts() {
   }
   if (pieRef.value) {
     pieChart = pieChart || echarts.init(pieRef.value)
+    const data = statusDist.value.map(r => ({ name: r.status, value: r.count }))
+    // 无数据时给明确文案，避免灰色空心圆被误认为"图表坏了"
     pieChart.setOption({
       tooltip: { trigger: 'item' },
+      title: data.length
+        ? { show: false }
+        : { text: '暂无知识库文件', left: 'center', top: 'middle',
+            textStyle: { color: '#9ca3af', fontSize: 13, fontWeight: 'normal' } },
       series: [{
         type: 'pie', radius: ['40%', '70%'],
-        data: statusDist.value.map(r => ({ name: r.status, value: r.count }))
+        data: data.length ? data : [],
+        label: { formatter: '{b}: {c} ({d}%)' }
       }]
     })
   }
