@@ -202,3 +202,11 @@ logging:
   level:
     root: INFO
     org.example: INFO
+
+# 扫描版 PDF 的 OCR（页面渲染 + 多模态模型识别）
+# 仅在「文本层抽取的正文不足」时触发；未配置 API Key 时自动跳过
+ocr:
+  enabled: ${OCR_ENABLED:true}
+  model: ${OCR_MODEL:qwen-vl-ocr}
+  max-pages: ${OCR_MAX_PAGES:20}
+  dpi: ${OCR_DPI:150}

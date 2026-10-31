@@ -60,6 +60,10 @@ public class FileIngestService {
     @Autowired
     private DocumentChunkService chunkService;
 
+    /** 扫描版 PDF 的 OCR（文本层抽取失败时兜底） */
+    @Autowired
+    private PdfOcrService pdfOcrService;
+
     @Autowired
     private TextExtractor textExtractor;
     @Autowired
@@ -107,10 +111,24 @@ public class FileIngestService {
 
             // 2. 抽取文本
             TextExtractor.ExtractResult er = textExtractor.extract(data, original);
-            if (er.text == null || er.text.isBlank()) {
-                throw new RuntimeException("文本抽取为空（文件可能是扫描版图片/加密 PDF，暂不支持）");
+
+            // 2.1 OCR 兜底：正文为空或过少时，若是 PDF 则先尝试 OCR（扫描件的主路径）
+            if (!TextQuality.usable(er.text) && isPdf(original)) {
+                logger.info("正文不足（{} 字），尝试 OCR: {}", TextQuality.usefulChars(er.text), original);
+                String ocrText = pdfOcrService.ocrPdf(data, original);
+                if (ocrText != null && TextQuality.usable(ocrText)) {
+                    logger.info("OCR 兜底成功: {}（文本层 {} 字 → OCR {} 字）",
+                            original, TextQuality.usefulChars(er.text), TextQuality.usefulChars(ocrText));
+                    er = new TextExtractor.ExtractResult(ocrText, false);
+                } else {
+                    logger.warn("OCR 未得到可用正文: {}", original);
+                }
             }
-            // 2.1 有效正文校验：只有标题/封面时不能当作可用资料入库
+
+            // 2.2 最终校验：仍然没有可用正文则明确报错（不静默入库）
+            if (er.text == null || er.text.isBlank()) {
+                throw new RuntimeException("文本抽取为空（文件可能是扫描版图片/加密 PDF，且 OCR 未得到内容）");
+            }
             if (!TextQuality.usable(er.text)) {
                 throw new RuntimeException(TextQuality.rejectionMessage(er.text));
             }
@@ -664,4 +682,9 @@ public class FileIngestService {
         public String message;
     }
 
+
+    /** 是否为 PDF（OCR 仅对 PDF 生效） */
+    private static boolean isPdf(String filename) {
+        return filename != null && filename.toLowerCase().endsWith(".pdf");
+    }
 }

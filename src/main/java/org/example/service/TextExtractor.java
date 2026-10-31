@@ -356,10 +356,18 @@ public class TextExtractor {
     private String extractPdf(byte[] data) {
         // 1) 优先 Apache PDFBox：带 ToUnicode/CID 解码，真实中文 PDF 能抽出干净正文
         String pdfbox = extractPdfWithPdfBox(data);
-        // 2) 回退启发式正则扫描（PDFBox 不可用时）
+
+        // 2) PDFBox 成功但正文极少 → 纯图片页（扫描件）。
+        //    绝不能再走启发式扫描：它会把压缩流按字符强行解码产出上千万字符乱码（实测 2000 万字符），
+        //    既浪费内存又污染知识库。直接返回空，交由上层质量闸门触发 OCR。
+        if (pdfbox != null && usefulLen(pdfbox) < 20) {
+            logger.info("PDFBox 仅抽出 {} 个有效字符，判定为纯图片页（扫描件），交由 OCR 处理", usefulLen(pdfbox));
+            return "";
+        }
+
+        // 3) PDFBox 不可用（解析异常）时才回退启发式
         String heuristic = extractPdfHeuristic(data);
 
-        // 择优：PDFBox 有可用文本且非乱码则用 PDFBox，否则用启发式
         String text;
         if (pdfbox != null && !pdfbox.isBlank() && !looksGarbled(pdfbox)) {
             text = pdfbox;
@@ -367,14 +375,14 @@ public class TextExtractor {
             text = heuristic;
         }
 
-        // 3) 过滤重复短行（页眉/页脚/页码/水印每页重复的噪声），减少白烧的 embedding token
-        text = stripRepeatedBoilerplate(text);
-
+        // 4) 乱码判定必须在清洗之前：清洗会删大量重复行、改变字符分布，可能把乱码"洗白"
         if (looksGarbled(text)) {
-            // CID 字体 / 编码不可映射时抽出来的是乱码（拉丁字符 + C1 控制符），会污染知识库，置空待上层报错
-            logger.warn("PDF 文本疑似乱码，置空待上层报错（文件可能是 CID 字体/扫描版）: len={}", text.length());
+            logger.warn("PDF 文本疑似乱码，置空待上层报错（可能是 CID 字体/扫描版）: len={}", text.length());
             return "";
         }
+
+        // 5) 过滤重复短行（页眉/页脚/页码/水印），减少白烧的 embedding token
+        text = stripRepeatedBoilerplate(text);
         return text;
     }
 
@@ -581,6 +589,16 @@ public class TextExtractor {
     }
 
     /** 检测 PDF 尽力抽取出的文本是否为乱码（CID 字体 / UTF-16 错位等）。返回 true 表示不可读。 */
+    /** 有效字符数（去空白） */
+    private static int usefulLen(String text) {
+        if (text == null) return 0;
+        int n = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (!Character.isWhitespace(text.charAt(i))) n++;
+        }
+        return n;
+    }
+
     private boolean looksGarbled(String text) {
         if (text == null || text.isEmpty()) return false;
         int total = text.length();
