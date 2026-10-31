@@ -1,10 +1,117 @@
-* { box-sizing: border-box; }
-html, body, #app { height: 100%; margin: 0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  background: #f5f7fb;
-  color: #1f2430;
+/* ===== StudyBuddy 主题：延续旧版「玻璃拟态暗色」视觉语言 ===== */
+/* 来源：static-legacy/styles.css（旧版 app.js 单页）—— 保留原有配色与质感，改为适配 Vue3 + Element Plus */
+
+:root {
+  --bg: #070b18;
+  --bg2: #0d1430;
+  --glass: rgba(255, 255, 255, 0.06);
+  --glass-strong: rgba(255, 255, 255, 0.10);
+  --border: rgba(255, 255, 255, 0.14);
+  --text: #eef2fb;
+  --muted: #9aa6c0;
+  --primary: #7c5cff;
+  --primary2: #19c3ff;
+  --primary3: #ff5ca8;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --grad: linear-gradient(135deg, #7c5cff, #19c3ff 55%, #ff5ca8);
+  --radius: 16px;
+  --radius-sm: 11px;
 }
-.page { padding: 20px 24px; }
-.page-title { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
-.page-sub { color: #6b7280; font-size: 13px; margin-bottom: 18px; }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #app { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background: radial-gradient(1200px 800px at 15% -10%, #16205a 0%, transparent 55%),
+              radial-gradient(1000px 700px at 95% 10%, #3a1d4f 0%, transparent 50%),
+              linear-gradient(160deg, var(--bg) 0%, var(--bg2) 100%);
+  background-attachment: fixed;
+  min-height: 100%;
+}
+
+/* 玻璃卡片 */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+/* 渐变主按钮 */
+.btn-grad {
+  background: var(--grad);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(124, 92, 255, .35);
+  transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+}
+.btn-grad:hover { transform: translateY(-1px); filter: brightness(1.06); box-shadow: 0 12px 30px rgba(124, 92, 255, .45); }
+.btn-grad:active { transform: translateY(0); }
+
+/* 页面标题 */
+.page { padding: 22px 26px; }
+.page-title {
+  font-size: 20px; font-weight: 800; letter-spacing: .3px;
+  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.page-sub { color: var(--muted); font-size: 13px; margin: 6px 0 18px; }
+
+/* ===== Element Plus 暗色适配（只影响用到的组件，避免整包覆盖） ===== */
+.el-card {
+  background: var(--glass) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: 0 12px 36px rgba(0,0,0,.34) !important;
+  color: var(--text) !important;
+}
+.el-card__header { border-bottom: 1px solid var(--border) !important; color: var(--text) !important; font-weight: 700; }
+
+.el-button--primary {
+  background: var(--grad) !important;
+  border: none !important;
+  box-shadow: 0 8px 22px rgba(124,92,255,.32);
+}
+.el-button--primary:hover { filter: brightness(1.08); }
+.el-button.is-link { color: var(--primary2) !important; }
+
+.el-input__wrapper,
+.el-textarea__inner {
+  background: rgba(255,255,255,.06) !important;
+  box-shadow: 0 0 0 1px var(--border) inset !important;
+  border-radius: var(--radius-sm) !important;
+}
+.el-input__inner, .el-textarea__inner { color: var(--text) !important; }
+.el-input__inner::placeholder, .el-textarea__inner::placeholder { color: var(--muted) !important; }
+
+.el-table { background: transparent !important; color: var(--text) !important; }
+.el-table tr, .el-table th.el-table__cell { background: rgba(255,255,255,.03) !important; color: var(--text) !important; }
+.el-table td.el-table__cell, .el-table th.el-table__cell { border-bottom: 1px solid var(--border) !important; }
+.el-table__body tr:hover > td.el-table__cell { background: rgba(255,255,255,.07) !important; }
+
+.el-tabs__item { color: var(--muted) !important; }
+.el-tabs__item.is-active { color: var(--text) !important; }
+.el-tabs__active-bar { background: var(--grad) !important; }
+.el-tabs__nav-wrap::after { background: var(--border) !important; }
+
+.el-dialog { background: #131a33 !important; border: 1px solid var(--border) !important; border-radius: var(--radius) !important; color: var(--text) !important; }
+.el-dialog__title { color: var(--text) !important; }
+.el-empty__description p { color: var(--muted) !important; }
+.el-tag { border-radius: 999px; }
+.el-message { background: #131a33 !important; border-color: var(--border) !important; color: var(--text) !important; }
+.el-message-box { background: #131a33 !important; border: 1px solid var(--border) !important; }
+.el-message-box__title, .el-message-box__content { color: var(--text) !important; }
+.el-select-dropdown { background: #131a33 !important; border-color: var(--border) !important; }
+.el-select-dropdown__item { color: var(--text) !important; }
+.el-select-dropdown__item.is-hovering { background: rgba(255,255,255,.08) !important; }
+.el-popper.is-light { background: #131a33 !important; border-color: var(--border) !important; color: var(--text) !important; }
+.el-popper.is-light .el-popper__arrow::before { background: #131a33 !important; border-color: var(--border) !important; }
