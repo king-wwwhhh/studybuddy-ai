@@ -2,6 +2,7 @@
 -- 列变更不再写 ALTER TABLE ADD COLUMN，由 SchemaMigrator 在启动期按列名幂等追加。
 
 CREATE TABLE IF NOT EXISTS study_plan (
+    user_id        INTEGER DEFAULT 0,
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     title         TEXT    NOT NULL,
     subject       TEXT,
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS study_plan (
 );
 
 CREATE TABLE IF NOT EXISTS plan_task (
+    user_id        INTEGER DEFAULT 0,
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id         INTEGER NOT NULL,
     phase           TEXT,
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS plan_task (
 );
 
 CREATE TABLE IF NOT EXISTS daily_checkin (
+    user_id        INTEGER DEFAULT 0,
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id          INTEGER NOT NULL,
     date             TEXT    NOT NULL,
@@ -48,6 +51,7 @@ CREATE TABLE IF NOT EXISTS daily_checkin (
 );
 
 CREATE TABLE IF NOT EXISTS weak_area (
+    user_id        INTEGER DEFAULT 0,
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id          INTEGER NOT NULL,
     subject          TEXT,
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS weak_area (
 
 -- 手动维护的章节清单：与 plan_task.chapter 一起作为出题「章节」选项来源
 CREATE TABLE IF NOT EXISTS plan_chapter (
+    user_id        INTEGER DEFAULT 0,
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id    INTEGER NOT NULL,
     name       TEXT    NOT NULL,
@@ -71,6 +76,7 @@ CREATE TABLE IF NOT EXISTS plan_chapter (
 );
 
 CREATE TABLE IF NOT EXISTS chat_session (
+    user_id        INTEGER DEFAULT 0,
     id         TEXT PRIMARY KEY,
     agent_name TEXT,
     title      TEXT,
@@ -89,6 +95,7 @@ CREATE TABLE IF NOT EXISTS chat_message (
 
 CREATE TABLE IF NOT EXISTS learner_profile (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER DEFAULT 0,
     name           TEXT,
     subjects       TEXT,
     exam_date      TEXT,
@@ -101,6 +108,7 @@ CREATE TABLE IF NOT EXISTS learner_profile (
 
 -- 知识库已摄取文件记录（GitHub 真源镜像的元数据）：列表/去重/同步重建
 CREATE TABLE IF NOT EXISTS knowledge_files (
+    user_id        INTEGER DEFAULT 0,
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     file_name   TEXT    NOT NULL,
     repo        TEXT,
