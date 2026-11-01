@@ -71,7 +71,6 @@ public class SchemaMigrator implements CommandLineRunner {
                 // 库/元数据表不存在，跳过迁移
                 return;
             }
-            ensureIndexes(tables);
             for (String[] m : migrations) {
                 String table = m[0], column = m[1], def = m[2];
                 if (!tables.contains(table)) continue;
@@ -86,6 +85,9 @@ public class SchemaMigrator implements CommandLineRunner {
                     logger.warn("跳过迁移 {}.{} ({})", table, column, ex.getMessage());
                 }
             }
+            // 索引必须在补列之后创建：索引定义引用了 user_id 等后加的列，
+            // 先建索引会因列不存在而全部失败（旧库升级场景）。
+            ensureIndexes(tables);
         } catch (Exception e) {
             logger.warn("SchemaMigrator 跳过：{}", e.getMessage());
         }
@@ -98,6 +100,17 @@ public class SchemaMigrator implements CommandLineRunner {
             logger.info("用户名唯一索引检查完成");
         } catch (Exception e) {
             logger.warn("创建用户名唯一索引失败（可能有重复数据）: {}", e.getMessage());
+        }
+
+        // 画像唯一索引：每用户一行（R2）。
+        // 同样必须在 learner_profile.user_id 补列之后创建——
+        // 旧库该表已存在但无此列，写在 schema.sql 里会抛 no such column: user_id。
+        try {
+            jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_learner_profile_user " +
+                    "ON learner_profile(user_id)");
+            logger.info("画像唯一索引检查完成");
+        } catch (Exception e) {
+            logger.warn("创建画像唯一索引失败（可能有重复数据）: {}", e.getMessage());
         }
 }
 

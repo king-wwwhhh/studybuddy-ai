@@ -138,8 +138,11 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
--- 画像改为每人一行（R2）：通过 user_id 唯一索引保证一个用户只有一份画像
-CREATE UNIQUE INDEX IF NOT EXISTS uq_learner_profile_user ON learner_profile(user_id);
+
+-- 注意：learner_profile 的 user_id 唯一索引不在这里创建。
+-- 旧库里 learner_profile 表已存在但缺 user_id 列，而 CREATE TABLE IF NOT EXISTS 会整段跳过，
+-- 在此建索引会抛 "no such column: user_id"，导致 dataSourceScriptDatabaseInitializer 阶段启动失败。
+-- 该索引改由 SchemaMigrator 在补列之后创建（与 uq_users_username 同一处理方式）。
 
 -- 系统级开关（key-value）
 CREATE TABLE IF NOT EXISTS system_settings (
