@@ -216,8 +216,7 @@ public class ChatService {
                 .model(chatModel)
                 .systemPrompt(system);
         if (!external) {
-            b.methodTools(methodToolsFor(agent))
-                    .tools(getToolCallbacks());
+            b.tools(authenticatedTools(methodToolsFor(agent)));
         }
         String fullAnswer = executeChat(b.build(), question);
         return new RouteResult(fullAnswer, agent.getType(), agent.getName());
@@ -256,8 +255,7 @@ public class ChatService {
                 .model(chatModel)
                 .systemPrompt(system);
         if (!external) {
-            b.methodTools(methodToolsFor(agent))
-                    .tools(getToolCallbacks());
+            b.tools(authenticatedTools(methodToolsFor(agent)));
         }
         // 外部模型：工具不注入（避免兼容性问题），但知识库内容已通过 system prompt 注入
         return b.build();
@@ -269,6 +267,15 @@ public class ChatService {
         Object[] merged = java.util.Arrays.copyOf(base, base.length + 1);
         merged[base.length] = historyRecallTool;
         return merged;
+    }
+
+    private ToolCallback[] authenticatedTools(Object[] methodTools) {
+        var principal = org.example.auth.AuthContext.get();
+        return java.util.stream.Stream.concat(
+                        java.util.Arrays.stream(org.springframework.ai.support.ToolCallbacks.from(methodTools)),
+                        java.util.Arrays.stream(getToolCallbacks()))
+                .map(callback -> new org.example.auth.AuthenticatedToolCallback(callback, principal))
+                .toArray(ToolCallback[]::new);
     }
 
     /** 取历史里最后一条用户消息（外部模型预检索的查询词） */
@@ -394,8 +401,7 @@ public class ChatService {
                 .name("intelligent_assistant")
                 .model(chatModel)
                 .systemPrompt(systemPrompt)
-                .methodTools(buildMethodToolsArray())
-                .tools(getToolCallbacks())
+                .tools(authenticatedTools(buildMethodToolsArray()))
                 .build();
     }
 

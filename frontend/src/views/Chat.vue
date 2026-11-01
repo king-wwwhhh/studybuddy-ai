@@ -140,14 +140,14 @@ async function send() {
   input.value = ''
   messages.value.push({ role: 'user', content: q })
   messages.value.push({ role: 'assistant', content: '', streaming: true, agent: '', error: false })
-  // 关键：必须通过索引拿到响应式代理再修改。
-  // 直接保存 push 前的原始对象引用去改，Vue3 不会触发更新（踩过的坑）。
-  const idx = messages.value.length - 1
-  const patch = (fn) => fn(messages.value[idx])
+  // Capture the reactive proxy after insertion so switching sessions cannot redirect old chunks.
+  const reply = messages.value[messages.value.length - 1]
+  const patch = (fn) => fn(reply)
   streaming.value = true
   await scrollBottom()
 
   controller = new AbortController()
+  try {
   await chatStream({
     question: q,
     sessionId: sessionId.value,
@@ -157,10 +157,9 @@ async function send() {
       patch(m => { m.content += chunk })
       scrollBottom()
     },
-    onDone: async (a) => {
+    onDone: (a) => {
       patch(m => { m.streaming = false; if (a) m.agent = a })
-      streaming.value = false
-      await loadSessions()
+      void loadSessions()
     },
     onError: (msg) => {
       patch(m => {
@@ -169,11 +168,15 @@ async function send() {
         m.content = (partial ? partial + ' ' : '') + '⚠️ ' + (msg || '回答失败')
         m.error = true
       })
-      streaming.value = false
       ElMessage.error(msg || '回答失败')
       scrollBottom()
     }
   })
+  } finally {
+    patch(m => { m.streaming = false })
+    streaming.value = false
+    controller = null
+  }
 }
 
 onMounted(async () => {

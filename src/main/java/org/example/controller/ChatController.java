@@ -82,6 +82,7 @@ public class ChatController {
 
             // 获取或创建会话
             SessionInfo session = getOrCreateSession(request.getId());
+            request.setId(session.sessionId);
 
             // 获取历史消息
             List<Map<String, String>> history = session.getHistory();
@@ -131,7 +132,8 @@ public class ChatController {
                 return ResponseEntity.ok(ApiResponse.error("会话ID不能为空"));
             }
 
-            SessionInfo session = sessions.get(request.getId());
+            memoryService.requireSessionAccess(request.getId());
+            SessionInfo session = sessions.get(cacheKey(request.getId()));
             if (session != null) {
                 session.clearHistory();
                 return ResponseEntity.ok(ApiResponse.success("会话历史已清空"));
@@ -151,8 +153,8 @@ public class ChatController {
      */
     @PostMapping(value = "/chat_stream", produces = "text/event-stream;charset=UTF-8")
     public SseEmitter chatStream(@RequestBody ChatRequest request) {
-        // 登记请求用户：工具调用可能异步执行，靠 VectorScope 的显式登记保证检索条件正确
-        org.example.service.VectorScope.setRequestUser(org.example.auth.OwnerSupport.currentUserId());
+        // Capture once: Reactor completion can execute on a different pooled thread.
+        var principal = org.example.auth.AuthContext.get();
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
         // 参数校验
@@ -173,6 +175,7 @@ public class ChatController {
 
                 // 获取或创建会话
                 SessionInfo session = getOrCreateSession(request.getId());
+                request.setId(session.sessionId);
                 
                 // 获取历史消息
                 List<Map<String, String>> history = session.getHistory();
@@ -240,7 +243,7 @@ public class ChatController {
                         logger.error("ReactAgent 流式对话失败", error);
                         sendErrorAndComplete(emitter, friendlyMessage(error));
                     },
-                    () -> {
+                    () -> org.example.auth.AuthContext.runAs(principal, () -> {
                         // 完成处理
                         try {
                             String fullAnswer = fullAnswerBuilder.toString();
@@ -264,7 +267,7 @@ public class ChatController {
                             logger.error("发送完成消息失败（已尝试收尾）", e);
                             sendErrorAndComplete(emitter, "回答已生成，但写回完成标记失败");
                         }
-                    }
+                    })
                 );
 
             } catch (Exception e) {
@@ -293,7 +296,8 @@ public class ChatController {
         try {
             logger.info("收到获取会话信息请求 - SessionId: {}", sessionId);
 
-            SessionInfo session = sessions.get(sessionId);
+            memoryService.requireSessionAccess(sessionId);
+            SessionInfo session = sessions.get(cacheKey(sessionId));
             if (session != null) {
                 SessionInfoResponse response = new SessionInfoResponse();
                 response.setSessionId(sessionId);
@@ -372,12 +376,18 @@ public class ChatController {
         if (sessionId == null || sessionId.isEmpty()) {
             sessionId = UUID.randomUUID().toString();
         }
-        SessionInfo session = sessions.computeIfAbsent(sessionId, id -> new SessionInfo(id, memoryService));
+        memoryService.ensureSession(sessionId, null, "会话");
+        final String id = sessionId;
+        SessionInfo session = sessions.computeIfAbsent(cacheKey(id), key -> new SessionInfo(id, memoryService));
         // 短期记忆恢复：若内存无记录但 SQLite 中已有历史，则载入最近窗口（超长时自动摘要压缩）
         if (session.isEmpty() && memoryService.getSession(sessionId) != null) {
             session.bulkLoadSummarized(memoryService.loadSummarized(sessionId, MAX_WINDOW_SIZE));
         }
         return session;
+    }
+
+    private static String cacheKey(String sessionId) {
+        return org.example.auth.OwnerSupport.currentUserId() + ":" + sessionId;
     }
 
     // ==================== 内部类 ====================

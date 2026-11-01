@@ -62,15 +62,15 @@ public class AuthService {
 
     /** 发送验证码；频率/额度超限抛 429 */
     public void sendCode(String rawEmail, String purpose) {
+        String p = normalizePurpose(purpose);
         // 关闭注册时，注册用途的验证码也不发（否则用户拿到码却注册不了，体验割裂）
-        if ("REGISTER".equalsIgnoreCase(purpose) && !systemSettingService.isRegistrationOpen()) {
+        if (PURPOSE_REGISTER.equals(p) && !systemSettingService.isRegistrationOpen()) {
             throw new AuthException(403, "管理员已暂停新用户注册");
         }
         String email = VerificationCodePolicy.normalizeEmail(rawEmail);
         if (!VerificationCodePolicy.isValidEmail(email)) {
             throw new AuthException(400, "邮箱格式不正确");
         }
-        String p = normalizePurpose(purpose);
         if (PURPOSE_REGISTER.equals(p) && users.findByEmail(email).isPresent()) {
             throw new AuthException(409, "该邮箱已注册，请直接登录");
         }
@@ -87,6 +87,9 @@ public class AuthService {
     // ===================== 注册 / 登录 =====================
 
     public AuthDtos.AuthResponse register(AuthDtos.RegisterRequest req) {
+        if (!systemSettingService.isRegistrationOpen()) {
+            throw new AuthException(403, "管理员已暂停新用户注册");
+        }
         String email = VerificationCodePolicy.normalizeEmail(req.email());
         if (!VerificationCodePolicy.isValidEmail(email)) {
             throw new AuthException(400, "邮箱格式不正确");

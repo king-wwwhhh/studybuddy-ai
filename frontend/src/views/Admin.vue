@@ -231,11 +231,12 @@ async function save() {
   saving.value = true
   try {
     if (editing.value) {
-      await http.post('/admin/users/' + form.id, { username: form.username, role: form.role })
+      const { data } = await http.post('/admin/users/' + form.id, { username: form.username, role: form.role })
+      if (!data.success) { ElMessage.error(data.errorMessage || data.message || '保存失败'); return }
       ElMessage.success('已保存')
     } else {
       const { data } = await http.post('/admin/users', form)
-      if (!data.success) { ElMessage.error(data.message || '创建失败'); return }
+      if (!data.success) { ElMessage.error(data.errorMessage || data.message || '创建失败'); return }
       ElMessage.success('已创建')
     }
     dialog.value = false
@@ -254,7 +255,7 @@ async function doReset() {
   saving.value = true
   try {
     const { data } = await http.post('/admin/users/' + resetTarget.value.id + '/password', { password: resetPwd.value })
-    if (!data.success) { ElMessage.error(data.message || '重置失败'); return }
+    if (!data.success) { ElMessage.error(data.errorMessage || data.message || '重置失败'); return }
     ElMessage.success('密码已重置')
     resetDialog.value = false
   } catch (e) { ElMessage.error('重置失败') } finally { saving.value = false }
@@ -268,7 +269,7 @@ async function removeUser(row) {
   } catch (e) { return }
   try {
     const { data } = await http.delete('/admin/users/' + row.id)
-    if (!data.success) { ElMessage.error(data.message || '删除失败'); return }
+    if (!data.success) { ElMessage.error(data.errorMessage || data.message || '删除失败'); return }
     ElMessage.success('已删除')
     await loadAll()
   } catch (e) { ElMessage.error('删除失败') }

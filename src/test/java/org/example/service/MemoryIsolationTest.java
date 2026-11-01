@@ -69,6 +69,12 @@ class MemoryIsolationTest {
         assertFalse(service.ownsSession("s1") == false, "A 自己应能访问");
         login(2);
         assertFalse(service.ownsSession("s1"));
+        assertThrows(org.example.auth.AuthService.AuthException.class, () -> service.loadMessages("s1"));
+        assertThrows(org.example.auth.AuthService.AuthException.class, () -> service.loadSummarized("s1", 6));
+        assertThrows(org.example.auth.AuthService.AuthException.class, () -> service.getSession("s1"));
+        assertThrows(org.example.auth.AuthService.AuthException.class, () -> service.saveMessage("s1", "user", "injected"));
+        assertThrows(org.example.auth.AuthService.AuthException.class, () -> service.ensureSession("s1", "chat", "hijack"));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM chat_message WHERE session_id='s1'", Integer.class));
     }
 
     @Test

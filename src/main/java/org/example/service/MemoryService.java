@@ -52,9 +52,15 @@ public class MemoryService {
         // 归属：会话创建时绑定当前用户（R4）
         jdbc.update("INSERT OR IGNORE INTO chat_session(id,agent_name,title,created_at,updated_at,user_id) VALUES(?,?,?,?,?,?)",
                 id, agentName, title != null ? title : "会话", now, now, OwnerSupport.currentUserId());
+        requireSessionAccess(id);
+        if (title != null && !"会话".equals(title)) {
+            jdbc.update("UPDATE chat_session SET title=?, agent_name=COALESCE(agent_name,?) WHERE id=? AND title='会话'",
+                    title, agentName, id);
+        }
     }
 
     public void saveMessage(String sessionId, String role, String content) {
+        requireSessionAccess(sessionId);
         String now = LocalDateTime.now().toString();
         jdbc.update("INSERT INTO chat_message(session_id,role,content,created_at) VALUES(?,?,?,?)",
                 sessionId, role, content, now);
@@ -64,6 +70,7 @@ public class MemoryService {
 
     /** 按时间正序返回会话全部消息（调用方按需取窗口尾部） */
     public List<ChatMessage> loadHistory(String sessionId) {
+        requireSessionAccess(sessionId);
         return jdbc.query("SELECT * FROM chat_message WHERE session_id=? ORDER BY created_at ASC", MSG_ROW, sessionId);
     }
 
@@ -87,6 +94,12 @@ public class MemoryService {
         return n != null && n > 0;
     }
 
+    public void requireSessionAccess(String sessionId) {
+        if (!ownsSession(sessionId)) {
+            throw new org.example.auth.AuthService.AuthException(403, "无权访问该会话或会话不存在");
+        }
+    }
+
     /**
      * 按关键词召回当前会话的历史消息（供 `recallHistory` 工具使用）。
      *
@@ -101,6 +114,7 @@ public class MemoryService {
     }
 
     public ChatSession getSession(String sessionId) {
+        requireSessionAccess(sessionId);
         return jdbc.query("SELECT * FROM chat_session WHERE id=?", (rs, i) -> {
             ChatSession s = new ChatSession();
             s.setId(rs.getString("id"));

@@ -22,50 +22,9 @@ public final class VectorScope {
     private VectorScope() {
     }
 
-    /**
-     * 请求级用户覆盖。
-     *
-     * <p><b>为什么需要</b>：SSE 对话在 chat-sse-* 线程里接收请求，
-     * 但工具调用会被 Reactor 切到 boundedElastic 线程执行，
-     * 此时 ThreadLocal 里的登录用户已经丢失，OwnerSupport.currentUserId() 退化为 0，
-     * 检索条件变成"只查系统数据"，用户自己的文档一条都召回不到
-     * （表现：文件明明在知识库里，一直说没找到）。</p>
-     *
-     * <p>因此由 Controller 在请求入口显式登记 userId，检索时优先读它。</p>
-     */
-    /**
-     * 显式登记的请求用户（静态，跨线程可见）。
-     *
-     * <p>为什么不用 ThreadLocal：SSE 工具调用会切到 boundedElastic 线程池，
-     * ThreadLocal / InheritableThreadLocal 在**线程池复用**场景下都不可靠
-     * （线程是复用的，inherited 只在首次创建时复制一次）。</p>
-     *
-     * <p>本应用是单机学习助手，用户量小，用一个进程级变量 + 请求边界登记已足够；
-     * 多租户高并发场景应改为把 userId 显式传入工具参数。</p>
-     */
-    private static volatile Long REQUEST_USER_OVERRIDE = null;
-
-    /** 在请求入口登记当前用户（工具线程异步执行时也能读到正确的 userId） */
-    public static void setRequestUser(Long userId) {
-        if (userId != null) {
-            REQUEST_USER_OVERRIDE = userId;
-        }
-    }
-
-    /** 取出并清理（请求结束时调用，避免线程复用串号） */
-    public static void clearRequestUser() {
-        REQUEST_USER_OVERRIDE = null;
-    }
-
-    /** 纯视图：不消费，供检索时反复读取 */
-    public static Long requestUser() {
-        return REQUEST_USER_OVERRIDE;
-    }
-
     /** 当前用户可检索的范围：本人 or 系统公共（user_id=0）or 旧数据（无该字段） */
     public static String searchExprForCurrentUser() {
-        Long override = REQUEST_USER_OVERRIDE;
-        return searchExpr(override != null ? override : OwnerSupport.currentUserId());
+        return searchExpr(OwnerSupport.currentUserId());
     }
 
     /**

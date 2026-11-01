@@ -39,6 +39,9 @@ public class AdminController {
     @Autowired
     private SystemSettingService systemSettingService;
 
+    @Autowired
+    private org.example.service.AccountDeletionService accountDeletionService;
+
     private static String trim(String s) {
         return s == null ? "" : s.trim();
     }
@@ -72,11 +75,16 @@ public class AdminController {
     }
     /** 启用/禁用账号 */
     @PostMapping("/users/{id}/status")
-    public ResponseEntity<?> updateStatus(@PathVariable long id, @RequestParam String status) {
+    public synchronized ResponseEntity<?> updateStatus(@PathVariable long id, @RequestParam String status) {
         String s = "DISABLED".equalsIgnoreCase(status) ? "DISABLED" : "ACTIVE";
         User target = users.findById(id).orElse(null);
         if (target == null) {
             return fail(404, "用户不存在");
+        }
+        if ("DISABLED".equals(s) && "ADMIN".equals(target.getRole())) {
+            Integer others = jdbc.queryForObject("SELECT COUNT(*) FROM users WHERE role='ADMIN' AND status='ACTIVE' AND id<>?",
+                    Integer.class, id);
+            if (others != null && others == 0) return fail(409, "这是最后一个管理员，不能禁用");
         }
         users.updateStatus(id, s);
         logger.info("管理员调整用户状态: id={} -> {}", id, s);
@@ -150,7 +158,7 @@ public class AdminController {
 
     /** 修改用户（昵称 / 角色） */
     @PostMapping("/users/{id}")
-    public ResponseEntity<?> updateUser(@PathVariable long id, @RequestBody Map<String, String> body) {
+    public synchronized ResponseEntity<?> updateUser(@PathVariable long id, @RequestBody Map<String, String> body) {
         try {
             Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM users WHERE id=?", Integer.class, id);
             if (exists == null || exists == 0) {
@@ -159,6 +167,7 @@ public class AdminController {
             String now = LocalDateTime.now().toString();
             // 改用户名：管理员和个人都能改，但必须合规且不重复
             String username = body.get("username");
+            String validatedName = null;
             if (username != null && !username.trim().isEmpty()) {
                 String name = username.trim();
                 String nameError = org.example.auth.UsernamePolicy.validate(name);
@@ -170,9 +179,10 @@ public class AdminController {
                 if (taken != null && taken > 0) {
                     return ResponseEntity.ok(ApiResponse.error("该用户名已被占用"));
                 }
-                jdbc.update("UPDATE users SET username=?, nickname=?, updated_at=? WHERE id=?", name, name, now, id);
+                validatedName = name;
             }
             String newRole = body.get("role");
+            String validatedRole = null;
             if (newRole != null && !newRole.trim().isEmpty()) {
                 String r = "ADMIN".equalsIgnoreCase(newRole.trim()) ? "ADMIN" : "USER";
                 if ("USER".equals(r)) {
@@ -182,8 +192,19 @@ public class AdminController {
                         return ResponseEntity.ok(ApiResponse.error("这是最后一个管理员，不能降级"));
                     }
                 }
-                jdbc.update("UPDATE users SET role=?, updated_at=? WHERE id=?", r, now, id);
+                validatedRole = r;
             }
+            final String nameToSave = validatedName;
+            final String roleToSave = validatedRole;
+            new org.springframework.transaction.support.TransactionTemplate(
+                    new org.springframework.jdbc.datasource.DataSourceTransactionManager(jdbc.getDataSource()))
+                    .executeWithoutResult(tx -> {
+                        if (nameToSave != null) jdbc.update(
+                                "UPDATE users SET username=?, nickname=?, updated_at=? WHERE id=?",
+                                nameToSave, nameToSave, now, id);
+                        if (roleToSave != null) jdbc.update("UPDATE users SET role=?, updated_at=? WHERE id=?",
+                                roleToSave, now, id);
+                    });
             return ResponseEntity.ok(ApiResponse.success(true));
         } catch (Exception e) {
             logger.error("修改用户失败", e);
@@ -210,7 +231,7 @@ public class AdminController {
 
     /** 删除用户及其业务数据 */
     @DeleteMapping("/users/{id}")
-    public ResponseEntity<?> deleteUser(@PathVariable long id) {
+    public synchronized ResponseEntity<?> deleteUser(@PathVariable long id) {
         try {
             Long me = OwnerSupport.currentUserId();
             if (me != null && me == id) {
@@ -227,16 +248,7 @@ public class AdminController {
                     return ResponseEntity.ok(ApiResponse.error("这是最后一个管理员，不能删除"));
                 }
             }
-            String[] tables = {"knowledge_files", "chat_message", "chat_session", "learner_profile",
-                    "plan_task", "daily_checkin", "weak_area", "plan_chapter", "study_plan"};
-            for (String table : tables) {
-                try {
-                    jdbc.update("DELETE FROM " + table + " WHERE user_id=?", id);
-                } catch (Exception ignore) {
-                    // 该表可能没有 user_id 列，跳过
-                }
-            }
-            jdbc.update("DELETE FROM users WHERE id=?", id);
+            accountDeletionService.delete(id);
             logger.info("管理员删除用户: id={}", id);
             return ResponseEntity.ok(ApiResponse.success(true));
         } catch (Exception e) {

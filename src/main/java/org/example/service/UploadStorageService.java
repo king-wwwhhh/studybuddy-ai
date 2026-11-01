@@ -98,6 +98,20 @@ public class UploadStorageService {
         }
     }
 
+    /** Account removal must propagate cleanup failures instead of reporting a false success. */
+    public void deleteRequired(String relativePath) throws IOException {
+        if (relativePath == null || relativePath.isBlank()) return;
+        Path root = Paths.get(dataDir, "uploads").toAbsolutePath().normalize();
+        Path path = Paths.get(dataDir).toAbsolutePath().resolve(relativePath).normalize();
+        if (!path.startsWith(root) || path.equals(root)) {
+            throw new IOException("拒绝删除 uploads 目录外的文件");
+        }
+        if (Files.exists(path) && !path.toRealPath().startsWith(root.toRealPath())) {
+            throw new IOException("拒绝删除 uploads 目录外的链接目标");
+        }
+        Files.deleteIfExists(path);
+    }
+
     /** 读取原文件（供下载/重解析）；不存在返回 null */
     public byte[] read(String relativePath) {
         if (relativePath == null || relativePath.isBlank()) {

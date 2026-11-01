@@ -32,6 +32,21 @@ public final class AuthContext {
         HOLDER.remove();
     }
 
+    /** Bind a captured request identity only for this invocation, including pooled tool threads. */
+    public static <T> T callAs(Principal principal, java.util.function.Supplier<T> action) {
+        Principal previous = get();
+        try {
+            if (principal == null) clear(); else set(principal);
+            return action.get();
+        } finally {
+            if (previous == null) clear(); else set(previous);
+        }
+    }
+
+    public static void runAs(Principal principal, Runnable action) {
+        callAs(principal, () -> { action.run(); return null; });
+    }
+
     /** 未登录时返回 null，由调用方决定是否要求登录 */
     public static Long userIdOrNull() {
         Principal p = HOLDER.get();

@@ -46,15 +46,18 @@ public class AuthInterceptor implements HandlerInterceptor {
     );
 
     private final JwtService jwtService;
+    private final UserRepository users;
 
-    public AuthInterceptor(JwtService jwtService) {
+    public AuthInterceptor(JwtService jwtService, UserRepository users) {
         this.jwtService = jwtService;
+        this.users = users;
     }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws Exception {
         String path = request.getRequestURI();
+        AuthContext.clear();
         if (HttpMethod.OPTIONS.matches(request.getMethod())) {
             return true;
         }
@@ -80,15 +83,19 @@ public class AuthInterceptor implements HandlerInterceptor {
             writeError(response, 401, "登录凭证格式非法");
             return false;
         }
-        String role = c.get("role", String.class);
-        String email = c.get("email", String.class);
-        AuthContext.set(new AuthContext.Principal(userId, email, role));
+        var user = users.findById(userId).orElse(null);
+        if (user == null || !user.isActive()) {
+            writeError(response, 401, "账号已失效或被禁用，请重新登录");
+            return false;
+        }
+        String role = user.getRole();
 
-        if (path.startsWith("/api/admin/") && !AuthContext.isAdmin()) {
+        if (path.startsWith("/api/admin/") && !"ADMIN".equals(role)) {
             logger.warn("越权访问后台接口: userId={} role={} path={}", userId, role, path);
             writeError(response, 403, "需要管理员权限");
             return false;
         }
+        AuthContext.set(new AuthContext.Principal(userId, user.getEmail(), role));
         return true;
     }
 
