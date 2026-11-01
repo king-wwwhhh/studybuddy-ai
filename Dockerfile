@@ -38,8 +38,11 @@ RUN groupadd --gid 1001 appuser \
 COPY --from=build /build/target/super-biz-agent-1.0-SNAPSHOT.jar /app/app.jar
 
 # 入口脚本：root 启动 → chown /data → 降权 appuser → java
+# 注意：必须强制转成 LF。若脚本带 CRLF，容器内 sh 会把 "set -e\r" 解析成
+# 非法参数并立刻退出，且不输出任何日志（表现为平台"应用日志已停止输出/健康检查超时"）。
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # 容器内默认配置（全部可被 PocketBay 环境变量覆盖）
 # - 数据全部落 /data（volume 持久化）

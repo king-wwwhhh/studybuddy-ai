@@ -1,0 +1,5 @@
+# Force LF for shell scripts. CRLF makes container sh fail with
+# "set: Illegal option -" and exit silently (known PocketBay deploy failure).
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-entrypoint.sh text eol=lf

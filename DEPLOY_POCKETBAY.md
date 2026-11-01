@@ -31,6 +31,21 @@
 | `APP_MASTER_KEY` | 可选 | `study-assistant-default-key` | 建议改成你自己的随机字符串 |
 | `SERVER_PORT` | 否 | `9900` | 容器内端口（已由 Dockerfile 内置，一般不用动） |
 
+### 2.1 账号体系变量（新增，**上线必看**）
+
+最新代码引入了注册 / 登录 / JWT 鉴权，以下变量**原文档没有提到**，但不配会直接影响可用性：
+
+| 变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| `AUTH_JWT_SECRET` | **强烈建议** | 空 | 不填则每次启动用**进程内随机密钥**，导致**每次重启/重新部署后所有用户 token 失效，被强制重新登录**。生产请填 32 位以上随机串。 |
+| `MAIL_USERNAME` | 可选 | 空 | 注册验证码的 SMTP 发件账号（如 `你的QQ号@qq.com`） |
+| `MAIL_PASSWORD` | 可选 | 空 | SMTP **授权码**（QQ 邮箱：设置 → 账户 → 开启 SMTP → 生成授权码，**不是登录密码**） |
+| `AUTH_BOOTSTRAP_ADMIN_EMAIL` | 可选 | 空 | 引导管理员：填某个已注册账号的邮箱，重启后该账号自动提升为 ADMIN |
+
+> **验证码怎么办**：未配置 SMTP 时，注册验证码会**打印在后端日志**里（搜 `code=`）。所以即使不配邮件也能完成注册，只是要去看 PocketBay 的应用日志。
+>
+> **管理员怎么办**：注册**不会**自动获得管理员权限。首次部署推荐：先注册一个账号 → 设置 `AUTH_BOOTSTRAP_ADMIN_EMAIL=该邮箱` → Redeploy。
+
 > 其余变量（`GITHUB_PUSH_ENABLED`、数据目录等）镜像内已按「容器安全默认」配好，不需要在 PocketBay 里填。
 
 ---
@@ -102,7 +117,9 @@ https://in03-xxxx.serverless.gcp-us-west1.cloud.zilliz.com
 4. 点击 **Deploy**，等待构建完成（Maven 在线下载依赖 + 打包，首次约几分钟）。
 5. 构建完成后平台会给一个 `https://<你的应用名>.pocketbay.app` 子域名。
 
-> **如果部署报 `健康检查失败 [startup_timeout]` / `应用日志已停止输出`，两类已知根因均已修复：**
+> **如果部署报 `健康检查失败 [startup_timeout]` / `应用日志已停止输出`，以下三类已知根因均已修复：**
+>
+> 0. **`docker-entrypoint.sh` 带 CRLF 换行**（2026-11-01）：脚本在 Windows 上被检出为 CRLF，容器内 `sh` 把 `set -e\r` 解析成非法参数，**启动即静默退出、无任何日志**。现已：仓库加入 `.gitattributes` 强制 `*.sh eol=lf`，且 Dockerfile 中对入口脚本加 `sed -i 's/\r$//'` 兜底，无论换行符来源如何镜像内都会是 LF。
 >
 > 1. **缺 `DASHSCOPE_API_KEY` 启动崩溃**（`d4439e5`，2026-08-26）：旧代码在 key 缺失/为空时于启动期抛异常。已修复为缺 key 也 ~3s 启动、健康检查通过（AI 功能降级，其余正常），Milvus 超时 30s→10s。
 > 2. **`/data/study.db: Permission denied`**（`docker-entrypoint.sh`，2026-08-26）：平台持久卷挂载 `/data` 后属主是 root，容器内非 root 用户写不进去导致数据库初始化崩溃。已改为 root 启动 → entrypoint chown `/data` 给 appuser → 降权运行应用，已在全新 root 属主卷上实测启动成功。
